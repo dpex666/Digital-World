@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SimulationEngine } from "../sim/systems/simulation";
 import { Action, Character, Settlement, SimulationState, Tile } from "../sim/core/types";
 import { loadPersisted, saveState } from "../sim/storage/persistence";
+import "./app.css";
 
 const CONFIG = { width: 48, height: 30, initialPopulation: 2, seed: 42 };
 const persisted = loadPersisted();
@@ -62,17 +63,9 @@ export function App(): JSX.Element {
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
   const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
   const [zoom, setZoom] = useState(1);
-  const [vw, setVw] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
   const saveCounter = useRef(0);
   const latest = useRef(sim);
   latest.current = sim;
-
-  useEffect(() => {
-    const onResize = () => setVw(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  const narrow = vw < 820;
 
   useEffect(() => {
     if (!observing) return;
@@ -124,7 +117,8 @@ export function App(): JSX.Element {
           style={{ marginTop: 8, padding: "6px 10px", background: "#1a2230", border: "1px solid #2c3a52", borderRadius: 6, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
           title="dismiss"
         >
-          ⏳ The world kept living while you were away — it advanced <b>{caughtUp}</b> days ({(caughtUp / 365).toFixed(1)} years) and never reset. (click to dismiss)
+          ⏳ The world kept living while you were away — it advanced <b>{caughtUp}</b> {caughtUp === 1 ? "day" : "days"}
+          {caughtUp >= 365 ? ` (${(caughtUp / 365).toFixed(1)} years)` : ""} and never reset. (tap to dismiss)
         </div>
       ) : null}
 
@@ -149,8 +143,8 @@ export function App(): JSX.Element {
         <span style={{ color: "#555", fontSize: 12, marginLeft: 6 }}>the view follows the living — they glow; click one to follow its life</span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "minmax(0, 2fr) minmax(280px, 1fr)", gap: 14 }}>
-        <div>
+      <div className="dw-layout">
+        <div style={{ minWidth: 0 }}>
           <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} />
 
           <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
@@ -515,12 +509,12 @@ function PopGraph({ sim }: { sim: SimulationState }): JSX.Element {
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 12, color: "#9aa", marginBottom: 4 }}>Population over time</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 60, background: "#101218", padding: 4, border: "1px solid #23252c" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 60, width: "100%", overflow: "hidden", background: "#101218", padding: 4, border: "1px solid #23252c" }}>
         {data.map((d, i) => (
           <div
             key={i}
             title={`yr ${d.year}: ${d.population}`}
-            style={{ width: 3, height: `${(d.population / max) * 100}%`, background: d.deaths > d.births ? "#9c5a5a" : "#4f8f6a" }}
+            style={{ flex: "1 1 0", minWidth: 0, height: `${(d.population / max) * 100}%`, background: d.deaths > d.births ? "#9c5a5a" : "#4f8f6a" }}
           />
         ))}
       </div>

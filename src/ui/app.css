@@ -1,0 +1,49 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #0b0c10;
+  overflow-x: hidden;
+}
+
+/* Observatory layout: world on the left, panels on the right; stacks on
+   narrow screens. A CSS media query is evaluated by the browser against the
+   real viewport, so it can't race or get a stale width like a JS check. */
+.dw-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .dw-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+button {
+  background: #1a1d26;
+  color: #e8e8ea;
+  border: 1px solid #2c303c;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #232733;
+}
+
+select {
+  background: #1a1d26;
+  color: #e8e8ea;
+  border: 1px solid #2c303c;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
