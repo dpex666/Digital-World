@@ -48,13 +48,13 @@ The world is **persistent**. It is saved continuously and on close, and on reope
 
 ### Two modes of persistence
 
-- **Shared world (when a store is attached):** a single world that *every visitor sees*, advancing by real elapsed time on each request and via an hourly cron — so it grows 24/7, even when no one is watching. Served by `api/world.ts` (a Vercel serverless function) backed by Vercel KV. The header shows a **● shared world** badge.
+- **Shared world (when a store is attached):** a single world that *every visitor sees*, advancing by real elapsed time on each request and via an hourly cron — so it grows 24/7, even when no one is watching. Served by `api/world.ts` (a Vercel serverless function) backed by an **Upstash Redis** store (what "Vercel KV" became). The header shows a **● shared world** badge.
 - **Local world (fallback):** if no store is configured, each browser grows its own world in local storage and catches up on reopen. The header shows **○ local world**. The site always works either way.
 
 ### One-time setup for the shared world on Vercel
 
 1. Import the repo at **vercel.com/new** (zero config — it auto-detects Vite; the `api/` folder deploys as serverless functions).
-2. In the project: **Storage → Create → KV**, and connect it (Vercel injects `KV_REST_API_URL` / `KV_REST_API_TOKEN`). That single step flips the site from local to shared.
+2. In the project: **Storage → Browse Storage → Marketplace → Upstash → Redis**, create a database and connect it to the project. (There is no "KV" tile anymore — Vercel renamed it; Upstash Redis is the same thing.) Connecting injects the REST URL/token env vars; the backend auto-detects whichever names are used (`KV_REST_API_*` or `UPSTASH_REDIS_REST_*`). That single step flips the site from local to shared. Redeploy if it was already deployed.
 3. The hourly cron in `vercel.json` keeps the world advancing with no traffic (cron frequency depends on your Vercel plan; compute-on-read advances it on every visit regardless).
 
 > Heads up: the serverless + KV path could not be exercised in the build sandbox (no Vercel runtime/KV there). It is written to degrade gracefully — if anything is misconfigured, visitors simply get the local world instead of an error.
