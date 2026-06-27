@@ -441,6 +441,8 @@ function chronicleColor(cat: string): string {
   if (cat === "discovery") return "#cdb6f0";
   if (cat === "epoch") return "#e9d27a";
   if (cat === "settlement") return "#9ec7e8";
+  if (cat === "trade") return "#7fd6c0";
+  if (cat === "conflict") return "#ef6f6f";
   if (cat === "social") return "#ccd";
   return "#99a";
 }
@@ -580,13 +582,19 @@ function MapView({
     for (const st of sim.settlements) {
       const px = offX + (st.center.x + 0.5) * ppt;
       const py = offY + (st.center.y + 0.5) * ppt;
-      ctx.strokeStyle = "rgba(216,196,106,0.65)";
+      // Ring colour reflects the village's temperament: gold when peaceable,
+      // red when warlike.
+      const hostile = st.culture.aggression;
+      const rr = Math.round(180 + hostile * 70);
+      const gg = Math.round(196 - hostile * 130);
+      const bb = Math.round(106 - hostile * 60);
+      ctx.strokeStyle = `rgba(${rr},${gg},${bb},0.7)`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(px, py, ppt * 2, 0, Math.PI * 2);
       ctx.stroke();
       if (ppt > 9) {
-        ctx.fillStyle = "#d8c46a";
+        ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
         ctx.font = "11px system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillText(st.name, px, py - ppt * 2.1);
@@ -738,6 +746,8 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
+      <Row k="Aggression" v={s.culture.aggression.toFixed(2)} />
+      <Row k="Trade openness" v={s.culture.tradePreference.toFixed(2)} />
       <Row k="Innovation" v={s.culture.innovation.toFixed(2)} />
       <Row k="Knowledge" v={s.knowledge.toFixed(2)} />
     </div>
