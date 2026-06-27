@@ -1,176 +1,242 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SimulationEngine } from "../sim/systems/simulation";
-import { Character, SimulationState, Tile } from "../sim/core/types";
+import { Action, Character, Settlement, SimulationState, Tile } from "../sim/core/types";
 import { loadState, saveState } from "../sim/storage/persistence";
 
-const engineFromSave = loadState();
-const engine = new SimulationEngine(
-  { width: 40, height: 26, initialPopulation: 36, seed: 42 },
-  engineFromSave ?? undefined,
-);
+const saved = loadState();
+const engine = new SimulationEngine({ width: 48, height: 30, initialPopulation: 2, seed: 42 }, saved ?? undefined);
 
-type Filter = "none" | "hunger" | "age" | "population" | "resources";
+// Viewing speeds — how fast we fast-forward through the world's time. The world
+// itself is autonomous; these only change how quickly we watch it unfold.
+const SPEEDS = [1, 4, 16, 60];
 
 function tileColor(tile: Tile): string {
   const food = tile.resources.food ?? 0;
-  if (tile.terrain === "water") return "#3d78d8";
-  if (tile.terrain === "mountain") return "#8d8d8d";
-  if (tile.terrain === "desert") return "#caaf62";
-  if (tile.terrain === "forest") return food > 8 ? "#1f8f3e" : "#2f6f3f";
-  return food > 8 ? "#90c56f" : "#6ba04a";
+  if (tile.terrain === "water") return "#21508f";
+  if (tile.terrain === "mountain") return "#6c6c74";
+  if (tile.terrain === "desert") return "#b8a05a";
+  if (tile.terrain === "forest") return food > 8 ? "#1c7a37" : "#27532f";
+  return food > 8 ? "#5f8f48" : "#46603a";
+}
+
+function appearanceColor(c: Character): string {
+  const a = c.appearance;
+  return `hsl(${Math.round(a.hue)}, ${Math.round(a.saturation * 100)}%, ${Math.round(35 + a.luminance * 45)}%)`;
+}
+
+function topActions(strategy: Record<Action, number>): string {
+  return (Object.entries(strategy) as [Action, number][])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([k, v]) => `${k} ${v.toFixed(1)}`)
+    .join(", ");
 }
 
 export function App(): JSX.Element {
   const [sim, setSim] = useState<SimulationState>(engine.state);
-  const [running, setRunning] = useState(true);
-  const [speed, setSpeed] = useState(2);
+  const [observing, setObserving] = useState(true);
+  const [speed, setSpeed] = useState(16);
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("none");
+  const saveCounter = useRef(0);
 
   useEffect(() => {
-    if (!running) return;
-    const handle = window.setInterval(() => {
-      setSim({ ...engine.step(speed) });
-    }, 120);
+    if (!observing) return;
+    const handle = window.setInterval(() => setSim({ ...engine.step(speed) }), 100);
     return () => window.clearInterval(handle);
-  }, [running, speed]);
+  }, [observing, speed]);
 
   useEffect(() => {
-    saveState(sim);
+    saveCounter.current += 1;
+    if (saveCounter.current % 20 === 0) saveState(sim);
   }, [sim]);
 
   const selectedChar = useMemo(
-    () => sim.characters.find((c) => c.id === selectedCharId) ?? null,
-    [sim.characters, selectedCharId],
+    () => sim.characters.find((c) => c.id === selectedCharId && c.alive) ?? null,
+    [sim, selectedCharId],
   );
-
   const selectedSettlement = useMemo(
     () => sim.settlements.find((s) => s.id === selectedSettlementId) ?? null,
-    [sim.settlements, selectedSettlementId],
+    [sim, selectedSettlementId],
   );
 
-  const recentHistory = sim.history.slice(-25).reverse();
-  const latestMetrics = sim.metrics[sim.metrics.length - 1];
+  const aliveByTile = useMemo(() => {
+    const map = new Map<string, Character[]>();
+    for (const c of sim.characters) {
+      if (!c.alive) continue;
+      const key = `${c.location.x}:${c.location.y}`;
+      const arr = map.get(key);
+      if (arr) arr.push(c);
+      else map.set(key, [c]);
+    }
+    return map;
+  }, [sim]);
+
+  const structuresByTile = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of sim.structures) map.set(`${s.location.x}:${s.location.y}`, (map.get(`${s.location.x}:${s.location.y}`) ?? 0) + 1);
+    return map;
+  }, [sim]);
+
+  const m = sim.metrics[sim.metrics.length - 1];
+  const recent = sim.history.slice(-40).reverse();
+  const lexicon = Object.entries(sim.language.lexicon);
 
   return (
-    <div style={{ fontFamily: "Inter, sans-serif", padding: 12, color: "#f5f5f5", background: "#111", minHeight: "100vh" }}>
-      <h1>Digital World — Emergent Simulation MVP</h1>
-      <p>
-        Tick {sim.tick} · Day {sim.environment.day} · {sim.environment.season} · Population {latestMetrics?.population ?? 0}
-      </p>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-        <button onClick={() => setRunning((s) => !s)}>{running ? "Pause" : "Play"}</button>
-        <button onClick={() => setSpeed(1)}>1x</button>
-        <button onClick={() => setSpeed(4)}>4x</button>
-        <button onClick={() => setSpeed(16)}>16x</button>
-        <button
-          onClick={() => {
-            setRunning(false);
-            setSim({ ...engine.step(1) });
-          }}
-        >
-          Step
-        </button>
-        <select value={filter} onChange={(e) => setFilter(e.target.value as Filter)}>
-          <option value="none">No Filter</option>
-          <option value="hunger">High Hunger</option>
-          <option value="age">Elders</option>
-          <option value="population">Dense Clusters</option>
-          <option value="resources">Low Resource Tiles</option>
-        </select>
+    <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 14, color: "#e8e8ea", background: "#0b0c10", minHeight: "100vh" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0, fontSize: 22 }}>Digital World</h1>
+        <span style={{ color: "#8a8f98", fontSize: 13 }}>
+          An autonomous civilisation that begins as two and grows, learns, and invents on its own. You are watching — not playing.
+        </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+      <p style={{ color: "#aab", fontSize: 13, marginTop: 8 }}>
+        Year <b>{m?.year ?? 0}</b> · Tick {sim.tick} · {sim.environment.season} · Climate <b>{sim.environment.climateEpoch}</b> (warmth{" "}
+        {sim.environment.warmth.toFixed(2)}) · Age: <b style={{ color: "#d8c46a" }}>{sim.epoch.name}</b> (epoch {sim.epoch.index}) · Population{" "}
+        <b>{m?.population ?? 0}</b> · Generation {m?.maxGeneration ?? 0}
+      </p>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
+        <span style={{ color: "#777", fontSize: 12 }}>view speed</span>
+        {SPEEDS.map((s) => (
+          <button key={s} onClick={() => setSpeed(s)} style={{ fontWeight: speed === s ? 700 : 400, opacity: speed === s ? 1 : 0.6 }}>
+            {s}×
+          </button>
+        ))}
+        <span style={{ color: "#555", fontSize: 12, marginLeft: 8 }}>the world runs on its own; speed only changes how fast you watch</span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(280px, 1fr)", gap: 14 }}>
         <div>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: `repeat(${sim.world.width}, 16px)`,
-              gridAutoRows: "16px",
-              border: "1px solid #333",
+              gridTemplateColumns: `repeat(${sim.world.width}, 15px)`,
+              gridAutoRows: "15px",
+              border: "1px solid #23252c",
               width: "fit-content",
+              background: "#000",
             }}
           >
             {sim.world.tiles.flatMap((row, y) =>
               row.map((tile, x) => {
-                const chars = sim.characters.filter((c) => c.alive && c.location.x === x && c.location.y === y);
-                const settlements = sim.settlements.filter(
-                  (s) => Math.abs(s.center.x - x) <= 1 && Math.abs(s.center.y - y) <= 1,
-                );
-                let overlay = "";
-                if (chars.length > 0) overlay = chars.length > 1 ? "●" : "•";
-                if (settlements.length > 0) overlay = "⌂";
-
-                let opacity = 1;
-                if (filter === "resources" && (tile.resources.food ?? 0) > 3) opacity = 0.25;
-                if (filter === "population" && chars.length < 2) opacity = 0.25;
-
+                const key = `${x}:${y}`;
+                const here = aliveByTile.get(key);
+                const struct = structuresByTile.get(key);
+                const inSettlement = sim.settlements.some((s) => Math.abs(s.center.x - x) <= 1 && Math.abs(s.center.y - y) <= 1);
+                const lead = here && here[0];
                 return (
-                  <button
-                    key={`${x}-${y}`}
-                    title={`(${x},${y}) food:${(tile.resources.food ?? 0).toFixed(1)}`}
+                  <div
+                    key={key}
+                    title={`(${x},${y}) ${tile.terrain} · ${sim.elements.food.name} ${(tile.resources.food ?? 0).toFixed(1)}${here ? ` · ${here.length} here` : ""}`}
+                    onClick={() => lead && setSelectedCharId(lead.id)}
                     style={{
-                      width: 16,
-                      height: 16,
-                      border: "1px solid rgba(0,0,0,0.2)",
-                      color: "#fff",
+                      width: 15,
+                      height: 15,
                       background: tileColor(tile),
-                      opacity,
-                      padding: 0,
-                      fontSize: 10,
-                    }}
-                    onClick={() => {
-                      const first = chars[0];
-                      if (first) setSelectedCharId(first.id);
+                      boxShadow: inSettlement ? "inset 0 0 0 1px #d8c46a" : undefined,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      position: "relative",
+                      cursor: lead ? "pointer" : "default",
                     }}
                   >
-                    {overlay}
-                  </button>
+                    {struct ? (
+                      <span style={{ position: "absolute", left: 1, top: -2, fontSize: 9, color: "#e9dca0" }}>⌂</span>
+                    ) : null}
+                    {lead ? (
+                      <span
+                        style={{
+                          width: here!.length > 1 ? 9 : 7,
+                          height: here!.length > 1 ? 9 : 7,
+                          borderRadius: lead.appearance.form > 0.5 ? "50%" : 2,
+                          background: appearanceColor(lead),
+                          border: here!.length > 1 ? "1px solid #fff" : "none",
+                        }}
+                      />
+                    ) : null}
+                  </div>
                 );
               }),
             )}
           </div>
 
-          <h3>Metrics</h3>
-          <div style={{ display: "flex", gap: 12 }}>
-            <Metric label="Population" value={latestMetrics?.population ?? 0} />
-            <Metric label="Births/tick" value={latestMetrics?.births ?? 0} />
-            <Metric label="Deaths/tick" value={latestMetrics?.deaths ?? 0} />
-            <Metric label="Food world total" value={latestMetrics?.foodTotal ?? 0} />
-            <Metric label="Shelters" value={latestMetrics?.shelterCount ?? 0} />
+          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            <Metric label="Population" value={m?.population ?? 0} />
+            <Metric label="Births (yr-tick)" value={m?.births ?? 0} />
+            <Metric label="Deaths (yr-tick)" value={m?.deaths ?? 0} />
+            <Metric label="Avg age (yrs)" value={m?.avgAgeYears ?? 0} />
+            <Metric label="Households" value={m?.households ?? 0} />
+            <Metric label="Settlements" value={m?.settlements ?? 0} />
+            <Metric label="Inventions" value={m?.techCount ?? 0} />
+            <Metric label="Avg intellect" value={m?.avgIntelligence ?? 0} />
           </div>
+
+          <PopGraph sim={sim} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <Panel title="Character Inspector">
-            {selectedChar ? <CharacterInspector c={selectedChar} filter={filter} /> : "Select a tile with an agent."}
+          <Panel title="Inhabitant">
+            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Click a being on the map to follow its life.</Muted>}
           </Panel>
-          <Panel title="Settlement Inspector">
-            <select value={selectedSettlementId ?? ""} onChange={(e) => setSelectedSettlementId(e.target.value || null)}>
-              <option value="">-- none --</option>
+
+          <Panel title="Civilisation">
+            <Row k="Age (epoch)" v={`${sim.epoch.name} · #${sim.epoch.index}`} />
+            <Row k="Knowledge" v={sim.knowledge.toFixed(0)} />
+            <Row k="Inventions" v={String(sim.techniques.length)} />
+            <div style={{ fontSize: 12, color: "#9aa", marginTop: 6 }}>Their inventions (named in their own tongue):</div>
+            <div style={{ fontSize: 12, maxHeight: 90, overflow: "auto" }}>
+              {sim.techniques.length === 0 ? (
+                <Muted>No inventions yet — they are still learning to survive.</Muted>
+              ) : (
+                sim.techniques
+                  .slice(-8)
+                  .reverse()
+                  .map((t) => (
+                    <div key={t.id}>
+                      <b style={{ color: "#cdb6f0" }}>{t.name}</b> <span style={{ color: "#667" }}>· tier {t.tier}</span>
+                    </div>
+                  ))
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their world's elements:</div>
+            <div style={{ fontSize: 12 }}>
+              {(Object.values(sim.elements)).map((el) => (
+                <span key={el.name} style={{ marginRight: 8, color: `hsl(${el.hue},60%,70%)` }}>
+                  {el.name} <span style={{ color: "#667" }}>({el.role})</span>
+                </span>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their language ({lexicon.length} words coined):</div>
+            <div style={{ fontSize: 12, color: "#bcd" }}>
+              {lexicon.slice(-10).map(([, w]) => w).join(" · ") || <Muted>—</Muted>}
+            </div>
+          </Panel>
+
+          <Panel title="Settlement">
+            <select
+              value={selectedSettlementId ?? ""}
+              onChange={(e) => setSelectedSettlementId(e.target.value || null)}
+              style={{ width: "100%", marginBottom: 6 }}
+            >
+              <option value="">— select a settlement —</option>
               {sim.settlements.map((s) => (
-                <option value={s.id} key={s.id}>
-                  {s.name}
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.memberIds.length})
                 </option>
               ))}
             </select>
-            {selectedSettlement ? (
-              <div>
-                <div>Members: {selectedSettlement.members.length}</div>
-                <div>Structures: {selectedSettlement.structures.length}</div>
-                <div>Cooperation: {selectedSettlement.culture.cooperation.toFixed(2)}</div>
-              </div>
-            ) : (
-              <div>No settlement selected.</div>
-            )}
+            {selectedSettlement ? <SettlementView s={selectedSettlement} sim={sim} /> : <Muted>None selected.</Muted>}
           </Panel>
-          <Panel title="World Event Feed">
-            <div style={{ maxHeight: 280, overflow: "auto", fontSize: 12 }}>
-              {recentHistory.map((e) => (
-                <div key={e.id}>
-                  [{e.tick}] ({e.category}) {e.message}
+
+          <Panel title="Chronicle">
+            <div style={{ maxHeight: 260, overflow: "auto", fontSize: 12 }}>
+              {recent.map((e) => (
+                <div key={e.id} style={{ color: chronicleColor(e.category), marginBottom: 2 }}>
+                  <span style={{ color: "#556" }}>[{e.tick}]</span> {e.message}
                 </div>
               ))}
             </div>
@@ -181,10 +247,87 @@ export function App(): JSX.Element {
   );
 }
 
+function chronicleColor(cat: string): string {
+  if (cat === "birth") return "#7fd1a3";
+  if (cat === "death") return "#d98c8c";
+  if (cat === "discovery") return "#cdb6f0";
+  if (cat === "epoch") return "#e9d27a";
+  if (cat === "settlement") return "#9ec7e8";
+  if (cat === "social") return "#ccd";
+  return "#99a";
+}
+
+function Inhabitant({ c, sim }: { c: Character; sim: SimulationState }): JSX.Element {
+  const settlement = sim.settlements.find((s) => s.id === c.settlementId);
+  return (
+    <div style={{ fontSize: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: c.appearance.form > 0.5 ? "50%" : 3,
+            background: appearanceColor(c),
+            display: "inline-block",
+          }}
+        />
+        <b>{c.name}</b>
+        <span style={{ color: "#778" }}>
+          {c.sex === "female" ? "♀" : "♂"} · gen {c.lineage.generation}
+        </span>
+      </div>
+      <Row k="Age / stage" v={`${Math.floor(c.ageDays / 365)} yrs · ${c.lifeStage}`} />
+      <Row k="Health" v={c.health.toFixed(0)} />
+      <Row k="Hunger / thirst" v={`${c.needs.hunger.toFixed(0)} / ${c.needs.thirst.toFixed(0)}`} />
+      <Row k="Doing now" v={c.lastAction} />
+      <Row k="Learned leaning" v={topActions(c.strategy)} />
+      <Row k="Intellect / educ." v={`${c.genetics.intelligence.toFixed(2)} / ${c.education.toFixed(2)}`} />
+      <Row k="Children" v={String(c.lineage.children.length)} />
+      <Row k="Settlement" v={settlement?.name ?? "—"} />
+      <div style={{ color: "#8a8f98", marginTop: 4, fontStyle: "italic" }}>{c.lastDecisionReason}</div>
+    </div>
+  );
+}
+
+function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JSX.Element {
+  const leader = sim.characters.find((c) => c.id === s.leaderId);
+  return (
+    <div style={{ fontSize: 13 }}>
+      <Row k="People" v={String(s.memberIds.length)} />
+      <Row k="Households" v={String(s.householdIds.length)} />
+      <Row k="Structures" v={String(s.structures.length)} />
+      <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
+      <Row k="Elder/leader" v={leader?.name ?? "—"} />
+      <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
+      <Row k="Innovation" v={s.culture.innovation.toFixed(2)} />
+      <Row k="Knowledge" v={s.knowledge.toFixed(2)} />
+    </div>
+  );
+}
+
+function PopGraph({ sim }: { sim: SimulationState }): JSX.Element {
+  const data = sim.metrics.slice(-160);
+  const max = Math.max(4, ...data.map((d) => d.population));
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: "#9aa", marginBottom: 4 }}>Population over time</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 60, background: "#101218", padding: 4, border: "1px solid #23252c" }}>
+        {data.map((d, i) => (
+          <div
+            key={i}
+            title={`yr ${d.year}: ${d.population}`}
+            style={{ width: 3, height: `${(d.population / max) * 100}%`, background: d.deaths > d.births ? "#9c5a5a" : "#4f8f6a" }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Panel(props: { title: string; children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #2f2f2f", padding: 8, background: "#1a1a1a" }}>
-      <h3>{props.title}</h3>
+    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: 10, background: "#111319" }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: 13, letterSpacing: 0.4, color: "#c7cad1", textTransform: "uppercase" }}>{props.title}</h3>
       {props.children}
     </div>
   );
@@ -192,35 +335,22 @@ function Panel(props: { title: string; children: React.ReactNode }): JSX.Element
 
 function Metric({ label, value }: { label: string; value: number }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #444", padding: "4px 8px", minWidth: 90 }}>
-      <div style={{ fontSize: 12 }}>{label}</div>
-      <strong>{typeof value === "number" ? value.toFixed(1) : value}</strong>
+    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: "6px 10px", minWidth: 96, background: "#111319" }}>
+      <div style={{ fontSize: 11, color: "#8a8f98" }}>{label}</div>
+      <strong style={{ fontSize: 16 }}>{value}</strong>
     </div>
   );
 }
 
-function CharacterInspector({ c, filter }: { c: Character; filter: Filter }): JSX.Element {
-  const highHunger = c.needs.hunger > 65;
-  if (filter === "hunger" && !highHunger) return <div>Filtered out (not high hunger).</div>;
-  if (filter === "age" && c.lifeStage !== "elder") return <div>Filtered out (not elder).</div>;
-
+function Row({ k, v }: { k: string; v: string }): JSX.Element {
   return (
-    <div style={{ fontSize: 13 }}>
-      <div>
-        {c.name} ({c.id}) {c.alive ? "alive" : "dead"}
-      </div>
-      <div>
-        Age {Math.floor(c.ageDays / 365)} years · stage {c.lifeStage} · sex {c.sex}
-      </div>
-      <div>Health {c.health.toFixed(1)}</div>
-      <div>
-        Needs: H {c.needs.hunger.toFixed(1)} · T {c.needs.thirst.toFixed(1)} · E {c.needs.energy.toFixed(1)} · M {c.needs.mood.toFixed(1)}
-      </div>
-      <div>
-        Role {c.role} · Foraging {c.skills.foraging.toFixed(2)} · Building {c.skills.building.toFixed(2)}
-      </div>
-      <div>Children {c.lineage.children.length} · Parents {c.lineage.parents.join(",") || "unknown"}</div>
-      <div>Decision reason: {c.lastDecisionReason}</div>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5, padding: "1px 0" }}>
+      <span style={{ color: "#8a8f98" }}>{k}</span>
+      <span style={{ textAlign: "right" }}>{v}</span>
     </div>
   );
+}
+
+function Muted({ children }: { children: React.ReactNode }): JSX.Element {
+  return <span style={{ color: "#667", fontSize: 12 }}>{children}</span>;
 }

@@ -1,6 +1,6 @@
 import { SimulationState } from "../core/types";
 
-const KEY = "digital-world-save";
+const KEY = "digital-world-save-v2";
 
 export function saveState(state: SimulationState): void {
   localStorage.setItem(KEY, JSON.stringify(state));
