@@ -36,6 +36,41 @@ function appearanceShade(c: Character, dl: number): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
 }
 
+// Pixel-art buildings, drawn from a few crisp rects. Their type tells the
+// civilisation's story: huts to live in, stores, tilled fields, workshops.
+function drawStructure(ctx: CanvasRenderingContext2D, px: number, py: number, type: string, ppt: number): void {
+  const u = Math.max(1, ppt * 0.14);
+  if (type === "cultivation") {
+    ctx.fillStyle = "#6b5235";
+    ctx.fillRect(px - 4 * u, py - 2 * u, 8 * u, 4 * u);
+    ctx.fillStyle = "#4e6838";
+    for (let i = 0; i < 3; i += 1) ctx.fillRect(px - 4 * u, py - 2 * u + i * 1.5 * u, 8 * u, Math.max(1, u * 0.5));
+    return;
+  }
+  const wall = type === "storage" ? "#9a7d52" : type === "workshop" ? "#6f6a72" : "#7a5a37";
+  const roof = type === "storage" ? "#6e5734" : type === "workshop" ? "#4f4b54" : "#5b4327";
+  ctx.fillStyle = wall;
+  ctx.fillRect(px - 3 * u, py - u, 6 * u, 3 * u);
+  ctx.fillStyle = roof;
+  ctx.beginPath();
+  ctx.moveTo(px - 4 * u, py - u);
+  ctx.lineTo(px, py - 4 * u);
+  ctx.lineTo(px + 4 * u, py - u);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#2e2113";
+  ctx.fillRect(px - u, py + 0.4 * u, 2 * u, 1.6 * u);
+  if (type === "workshop") {
+    ctx.fillStyle = roof;
+    ctx.fillRect(px + 2 * u, py - 3.4 * u, 1.2 * u, 1.6 * u);
+    ctx.fillStyle = "rgba(220,220,225,0.6)";
+    ctx.fillRect(px + 2.1 * u, py - 5 * u, u, u);
+  } else if (type === "storage") {
+    ctx.fillStyle = roof;
+    ctx.fillRect(px - 3 * u, py, 6 * u, Math.max(1, u * 0.4));
+  }
+}
+
 // Draw one being as a pixel-art creature tinted by its genome — body colour,
 // outline, eyes, legs and belly marking all derive from inherited genes, so
 // each lineage looks distinct and evolves over generations.
@@ -530,19 +565,11 @@ function MapView({
       ctx.fillRect(0, 0, cssW, cssH);
     }
 
-    // Structures — little houses.
+    // Structures — pixel buildings; clusters of them read as villages.
     for (const s of sim.structures) {
       const px = offX + (s.location.x + 0.5) * ppt;
       const py = offY + (s.location.y + 0.5) * ppt;
-      const r = Math.max(2, ppt * 0.3);
-      ctx.fillStyle = s.type === "shelter" ? "#e7d6a0" : s.type === "cultivation" ? "#9cc06a" : "#b9c8d8";
-      ctx.fillRect(px - r, py - r * 0.4, r * 2, r * 1.2);
-      ctx.beginPath();
-      ctx.moveTo(px - r * 1.1, py - r * 0.4);
-      ctx.lineTo(px, py - r * 1.3);
-      ctx.lineTo(px + r * 1.1, py - r * 0.4);
-      ctx.closePath();
-      ctx.fill();
+      drawStructure(ctx, px, py, s.type, ppt);
     }
 
     // Settlements — rings + names.
