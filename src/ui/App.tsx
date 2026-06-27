@@ -24,18 +24,26 @@ if (persisted) {
 // itself is autonomous; these only change how quickly we watch it unfold.
 const SPEEDS = [1, 4, 16, 60];
 
-function tileColor(tile: Tile): string {
-  const food = tile.resources.food ?? 0;
-  if (tile.terrain === "water") return "#21508f";
-  if (tile.terrain === "mountain") return "#6c6c74";
-  if (tile.terrain === "desert") return "#b8a05a";
-  if (tile.terrain === "forest") return food > 8 ? "#1c7a37" : "#27532f";
-  return food > 8 ? "#5f8f48" : "#46603a";
-}
-
 function appearanceColor(c: Character): string {
   const a = c.appearance;
-  return `hsl(${Math.round(a.hue)}, ${Math.round(a.saturation * 100)}%, ${Math.round(35 + a.luminance * 45)}%)`;
+  return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(45 + a.luminance * 35)}%)`;
+}
+
+// Calmer terrain so the glowing beings stand out against it.
+function mutedTileColor(tile: Tile): string {
+  const food = tile.resources.food ?? 0;
+  switch (tile.terrain) {
+    case "water":
+      return "#27456b";
+    case "mountain":
+      return "#474751";
+    case "desert":
+      return "#9c8b56";
+    case "forest":
+      return food > 8 ? "#2c5b36" : "#26492e";
+    default:
+      return food > 8 ? "#43623c" : "#374e32";
+  }
 }
 
 function topActions(strategy: Record<Action, number>): string {
@@ -53,9 +61,18 @@ export function App(): JSX.Element {
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
   const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
+  const [zoom, setZoom] = useState(1);
+  const [vw, setVw] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
   const saveCounter = useRef(0);
   const latest = useRef(sim);
   latest.current = sim;
+
+  useEffect(() => {
+    const onResize = () => setVw(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const narrow = vw < 820;
 
   useEffect(() => {
     if (!observing) return;
@@ -88,24 +105,6 @@ export function App(): JSX.Element {
     [sim, selectedSettlementId],
   );
 
-  const aliveByTile = useMemo(() => {
-    const map = new Map<string, Character[]>();
-    for (const c of sim.characters) {
-      if (!c.alive) continue;
-      const key = `${c.location.x}:${c.location.y}`;
-      const arr = map.get(key);
-      if (arr) arr.push(c);
-      else map.set(key, [c]);
-    }
-    return map;
-  }, [sim]);
-
-  const structuresByTile = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const s of sim.structures) map.set(`${s.location.x}:${s.location.y}`, (map.get(`${s.location.x}:${s.location.y}`) ?? 0) + 1);
-    return map;
-  }, [sim]);
-
   const m = sim.metrics[sim.metrics.length - 1];
   const recent = sim.history.slice(-40).reverse();
   const lexicon = Object.entries(sim.language.lexicon);
@@ -137,69 +136,30 @@ export function App(): JSX.Element {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
-        <span style={{ color: "#777", fontSize: 12 }}>view speed</span>
+        <span style={{ color: "#777", fontSize: 12 }}>speed</span>
         {SPEEDS.map((s) => (
           <button key={s} onClick={() => setSpeed(s)} style={{ fontWeight: speed === s ? 700 : 400, opacity: speed === s ? 1 : 0.6 }}>
             {s}×
           </button>
         ))}
-        <span style={{ color: "#555", fontSize: 12, marginLeft: 8 }}>the world runs on its own; speed only changes how fast you watch</span>
+        <span style={{ color: "#777", fontSize: 12, marginLeft: 6 }}>zoom</span>
+        <button onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.5).toFixed(1)))}>−</button>
+        <button onClick={() => setZoom((z) => Math.min(6, +(z + 0.5).toFixed(1)))}>+</button>
+        <span style={{ color: "#555", fontSize: 12 }}>{zoom.toFixed(1)}×</span>
+        <span style={{ color: "#555", fontSize: 12, marginLeft: 6 }}>the view follows the living — they glow; click one to follow its life</span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(280px, 1fr)", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "minmax(0, 2fr) minmax(280px, 1fr)", gap: 14 }}>
         <div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${sim.world.width}, 15px)`,
-              gridAutoRows: "15px",
-              border: "1px solid #23252c",
-              width: "fit-content",
-              background: "#000",
-            }}
-          >
-            {sim.world.tiles.flatMap((row, y) =>
-              row.map((tile, x) => {
-                const key = `${x}:${y}`;
-                const here = aliveByTile.get(key);
-                const struct = structuresByTile.get(key);
-                const inSettlement = sim.settlements.some((s) => Math.abs(s.center.x - x) <= 1 && Math.abs(s.center.y - y) <= 1);
-                const lead = here && here[0];
-                return (
-                  <div
-                    key={key}
-                    title={`(${x},${y}) ${tile.terrain} · ${sim.elements.food.name} ${(tile.resources.food ?? 0).toFixed(1)}${here ? ` · ${here.length} here` : ""}`}
-                    onClick={() => lead && setSelectedCharId(lead.id)}
-                    style={{
-                      width: 15,
-                      height: 15,
-                      background: tileColor(tile),
-                      boxShadow: inSettlement ? "inset 0 0 0 1px #d8c46a" : undefined,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      position: "relative",
-                      cursor: lead ? "pointer" : "default",
-                    }}
-                  >
-                    {struct ? (
-                      <span style={{ position: "absolute", left: 1, top: -2, fontSize: 9, color: "#e9dca0" }}>⌂</span>
-                    ) : null}
-                    {lead ? (
-                      <span
-                        style={{
-                          width: here!.length > 1 ? 9 : 7,
-                          height: here!.length > 1 ? 9 : 7,
-                          borderRadius: lead.appearance.form > 0.5 ? "50%" : 2,
-                          background: appearanceColor(lead),
-                          border: here!.length > 1 ? "1px solid #fff" : "none",
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                );
-              }),
-            )}
+          <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} />
+
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
+            <Swatch c="#27456b" label="water" />
+            <Swatch c="#474751" label="mountain" />
+            <Swatch c="#9c8b56" label="desert" />
+            <Swatch c="#2c5b36" label="forest" />
+            <Swatch c="#43623c" label="plains" />
+            <span style={{ marginLeft: 6 }}>◆ beings (coloured by their evolving genome) · ⌂ structures · ◯ settlements</span>
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
@@ -293,6 +253,212 @@ function chronicleColor(cat: string): string {
   if (cat === "settlement") return "#9ec7e8";
   if (cat === "social") return "#ccd";
   return "#99a";
+}
+
+interface DrawParams {
+  offX: number;
+  offY: number;
+  ppt: number;
+}
+
+// Canvas map with a camera that auto-frames the living, so a handful of beings
+// fill the view instead of vanishing into a thousand terrain tiles.
+function MapView({
+  sim,
+  selectedCharId,
+  onSelect,
+  zoom,
+}: {
+  sim: SimulationState;
+  selectedCharId: string | null;
+  onSelect: (id: string) => void;
+  zoom: number;
+}): JSX.Element {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cam = useRef({ cx: sim.world.width / 2, cy: sim.world.height / 2, scale: 16 });
+  const params = useRef<DrawParams>({ offX: 0, offY: 0, ppt: 16 });
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = Math.max(240, wrap.clientWidth);
+    const cssH = Math.max(280, Math.min(560, Math.round(cssW * 0.62)));
+    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const alive = sim.characters.filter((c) => c.alive);
+    let minX = sim.world.width;
+    let minY = sim.world.height;
+    let maxX = 0;
+    let maxY = 0;
+    if (alive.length) {
+      for (const c of alive) {
+        minX = Math.min(minX, c.location.x);
+        maxX = Math.max(maxX, c.location.x);
+        minY = Math.min(minY, c.location.y);
+        maxY = Math.max(maxY, c.location.y);
+      }
+    } else {
+      minX = 0;
+      minY = 0;
+      maxX = sim.world.width - 1;
+      maxY = sim.world.height - 1;
+    }
+    const pad = 5;
+    const boxW = Math.max(8, maxX - minX + pad * 2);
+    const boxH = Math.max(8, maxY - minY + pad * 2);
+    const fit = Math.min(cssW / boxW, cssH / boxH);
+    const targetScale = Math.max(5, Math.min(54, fit)) * zoom;
+    const targetCx = (minX + maxX) / 2 + 0.5;
+    const targetCy = (minY + maxY) / 2 + 0.5;
+    const k = 0.2;
+    cam.current.scale += (targetScale - cam.current.scale) * k;
+    cam.current.cx += (targetCx - cam.current.cx) * k;
+    cam.current.cy += (targetCy - cam.current.cy) * k;
+
+    const ppt = cam.current.scale;
+    const offX = cssW / 2 - cam.current.cx * ppt;
+    const offY = cssH / 2 - cam.current.cy * ppt;
+    params.current = { offX, offY, ppt };
+
+    ctx.fillStyle = "#06070a";
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    const x0 = Math.max(0, Math.floor(-offX / ppt));
+    const x1 = Math.min(sim.world.width - 1, Math.ceil((cssW - offX) / ppt));
+    const y0 = Math.max(0, Math.floor(-offY / ppt));
+    const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        ctx.fillStyle = mutedTileColor(sim.world.tiles[y][x]);
+        ctx.fillRect(offX + x * ppt, offY + y * ppt, ppt + 1, ppt + 1);
+      }
+    }
+
+    // Structures — little houses.
+    for (const s of sim.structures) {
+      const px = offX + (s.location.x + 0.5) * ppt;
+      const py = offY + (s.location.y + 0.5) * ppt;
+      const r = Math.max(2, ppt * 0.3);
+      ctx.fillStyle = s.type === "shelter" ? "#e7d6a0" : s.type === "cultivation" ? "#9cc06a" : "#b9c8d8";
+      ctx.fillRect(px - r, py - r * 0.4, r * 2, r * 1.2);
+      ctx.beginPath();
+      ctx.moveTo(px - r * 1.1, py - r * 0.4);
+      ctx.lineTo(px, py - r * 1.3);
+      ctx.lineTo(px + r * 1.1, py - r * 0.4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Settlements — rings + names.
+    for (const st of sim.settlements) {
+      const px = offX + (st.center.x + 0.5) * ppt;
+      const py = offY + (st.center.y + 0.5) * ppt;
+      ctx.strokeStyle = "rgba(216,196,106,0.65)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, ppt * 2, 0, Math.PI * 2);
+      ctx.stroke();
+      if (ppt > 9) {
+        ctx.fillStyle = "#d8c46a";
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(st.name, px, py - ppt * 2.1);
+      }
+    }
+
+    // Beings — glowing, shape-varied creatures coloured by their genome.
+    const stacked = new Map<string, number>();
+    for (const c of alive) {
+      const key = `${c.location.x}:${c.location.y}`;
+      const i = stacked.get(key) ?? 0;
+      stacked.set(key, i + 1);
+      const ang = i * 2.39996;
+      const spread = i ? Math.min(ppt * 0.34, 2.5 + i * 1.2) : 0;
+      const px = offX + (c.location.x + 0.5) * ppt + Math.cos(ang) * spread;
+      const py = offY + (c.location.y + 0.5) * ppt + Math.sin(ang) * spread;
+      const stageScale = c.lifeStage === "infant" ? 0.5 : c.lifeStage === "child" ? 0.72 : c.lifeStage === "elder" ? 0.88 : 1;
+      const r = Math.max(2.5, ppt * 0.24 * (0.7 + c.appearance.size) * stageScale);
+      const sel = c.id === selectedCharId;
+      ctx.save();
+      ctx.shadowColor = appearanceColor(c);
+      ctx.shadowBlur = Math.min(14, r * 1.6);
+      ctx.fillStyle = appearanceColor(c);
+      ctx.strokeStyle = sel ? "#ffffff" : "rgba(0,0,0,0.45)";
+      ctx.lineWidth = sel ? 2 : 1;
+      ctx.beginPath();
+      const form = c.appearance.form;
+      if (form < 0.33) {
+        ctx.rect(px - r, py - r, r * 2, r * 2);
+      } else if (form < 0.66) {
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+      } else {
+        ctx.moveTo(px, py - r);
+        ctx.lineTo(px + r, py + r);
+        ctx.lineTo(px - r, py + r);
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      if (sel) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }, [sim, selectedCharId, zoom]);
+
+  const onClick = (e: React.MouseEvent<HTMLCanvasElement>): void => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const { offX, offY, ppt } = params.current;
+    const wx = (x - offX) / ppt - 0.5;
+    const wy = (y - offY) / ppt - 0.5;
+    let best: string | null = null;
+    let bestD = 0.9 * 0.9;
+    for (const c of sim.characters) {
+      if (!c.alive) continue;
+      const dx = c.location.x - wx;
+      const dy = c.location.y - wy;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = c.id;
+      }
+    }
+    if (best) onSelect(best);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
+      <canvas ref={canvasRef} onClick={onClick} style={{ width: "100%", borderRadius: 8, border: "1px solid #23252c", cursor: "pointer", display: "block" }} />
+    </div>
+  );
+}
+
+function Swatch({ c, label }: { c: string; label: string }): JSX.Element {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <span style={{ width: 10, height: 10, background: c, borderRadius: 2, display: "inline-block" }} />
+      {label}
+    </span>
+  );
 }
 
 function Inhabitant({ c, sim }: { c: Character; sim: SimulationState }): JSX.Element {
