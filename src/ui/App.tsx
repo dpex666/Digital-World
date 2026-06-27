@@ -364,7 +364,11 @@ export function App(): JSX.Element {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Click a being on the map to follow its life.</Muted>}
+            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+          </Panel>
+
+          <Panel title="Notable Lives">
+            <NotableLives sim={sim} onSelect={setSelectedCharId} />
           </Panel>
 
           <Panel title="Civilisation">
@@ -643,6 +647,52 @@ function Swatch({ c, label }: { c: string; label: string }): JSX.Element {
       <span style={{ width: 10, height: 10, background: c, borderRadius: 2, display: "inline-block" }} />
       {label}
     </span>
+  );
+}
+
+// The civilisation's standout individuals — gives the viewer named characters
+// to follow as lineages rise and fall.
+function NotableLives({ sim, onSelect }: { sim: SimulationState; onSelect: (id: string) => void }): JSX.Element {
+  const alive = sim.characters.filter((c) => c.alive);
+  if (!alive.length) return <Muted>No one is left alive.</Muted>;
+  const pick = (f: (c: Character) => number): Character => alive.reduce((a, b) => (f(b) > f(a) ? b : a));
+  const eldest = pick((c) => c.ageDays);
+  const prolific = pick((c) => c.lineage.children.length);
+  const brightest = pick((c) => c.genetics.intelligence);
+
+  const Item = ({ label, c, stat }: { label: string; c: Character; stat: string }): JSX.Element => (
+    <div
+      onClick={() => onSelect(c.id)}
+      style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "3px 0" }}
+      title={`Follow ${c.name}`}
+    >
+      <span
+        style={{
+          width: 16,
+          height: 16,
+          flex: "0 0 auto",
+          borderRadius: c.appearance.form > 0.5 ? "50%" : 3,
+          background: appearanceColor(c),
+          boxShadow: `0 0 6px ${appearanceColor(c)}`,
+        }}
+      />
+      <div style={{ fontSize: 12.5, lineHeight: 1.25 }}>
+        <div>
+          {c.name} <span style={{ color: "#778" }}>{c.sex === "female" ? "♀" : "♂"}</span>
+        </div>
+        <div style={{ color: "#8a8f98", fontSize: 11 }}>
+          {label} · {stat}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <Item label="Eldest" c={eldest} stat={`${Math.floor(eldest.ageDays / 365)} years old`} />
+      <Item label="Most children" c={prolific} stat={`${prolific.lineage.children.length} children`} />
+      <Item label="Brightest" c={brightest} stat={`intellect ${brightest.genetics.intelligence.toFixed(2)}`} />
+    </div>
   );
 }
 
