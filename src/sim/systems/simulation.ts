@@ -566,12 +566,16 @@ export class SimulationEngine {
     c.partnerId = best.id;
     best.partnerId = c.id;
     const female = c.sex === "female" ? c : best;
+    // Dispersal: a new couple strikes out to settle their own patch of land
+    // rather than piling onto their parents' tile, so the people spread across
+    // the world and grow into many settlements instead of one heap.
+    const site = this.findDispersalSite(c.location);
     const home: Household = {
       id: makeId("home"),
       name: `${female.name} ${wordFor(this.state.language, this.rng, "hearth")}`,
       memberIds: [c.id, best.id],
       founderIds: [c.id, best.id],
-      location: { ...c.location },
+      location: site,
       storage: { food: 3, water: 3, wood: 1, stone: 0 },
       toolLevel: 1,
       foundedTick: this.state.tick,
@@ -580,9 +584,38 @@ export class SimulationEngine {
       const old = this.household(partner.householdId);
       if (old) old.memberIds = old.memberIds.filter((id) => id !== partner.id);
       partner.householdId = home.id;
+      partner.location = { ...site };
     }
     this.state.households.push(home);
-    this.log("social", `${c.name} and ${best.name} bonded and founded a new household.`, [c.id, best.id]);
+    this.log("social", `${c.name} and ${best.name} bonded and set out to settle new ground.`, [c.id, best.id]);
+  }
+
+  // Pick a habitable tile a few steps away to found a new household on, so the
+  // population fans out from the cradle over generations.
+  private findDispersalSite(from: Vec2): Vec2 {
+    const w = this.state.world.width;
+    const h = this.state.world.height;
+    // Bias movement outward from the world's centre, so each generation pushes
+    // the frontier into open land rather than circling the cradle.
+    const outward = Math.atan2(from.y - h / 2, from.x - w / 2);
+    let fallback: Vec2 = { ...from };
+    let best: Vec2 | null = null;
+    let bestFert = -1;
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      const ang = outward + this.rng.range(-1.3, 1.3);
+      const dist = 3 + this.rng.int(8);
+      const nx = Math.round(from.x + Math.cos(ang) * dist);
+      const ny = Math.round(from.y + Math.sin(ang) * dist);
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const t = this.state.world.tiles[ny][nx];
+      if (t.terrain === "water" || t.terrain === "mountain") continue;
+      fallback = { x: nx, y: ny };
+      if (t.fertility > bestFert) {
+        bestFert = t.fertility;
+        best = { x: nx, y: ny };
+      }
+    }
+    return best ?? fallback;
   }
 
   // ------------------------------------------------------------ reproduction
@@ -747,7 +780,7 @@ export class SimulationEngine {
       let nearestDist = Infinity;
       for (const s of this.state.settlements) {
         const d = Math.abs(s.center.x - h.location.x) + Math.abs(s.center.y - h.location.y);
-        if (d <= 5 && d < nearestDist) {
+        if (d <= 3 && d < nearestDist) {
           nearestDist = d;
           nearestId = s.id;
         }

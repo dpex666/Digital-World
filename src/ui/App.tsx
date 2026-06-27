@@ -4,7 +4,7 @@ import { Action, Character, Settlement, SimulationState, Tile } from "../sim/cor
 import { loadPersisted, saveState } from "../sim/storage/persistence";
 import "./app.css";
 
-const CONFIG = { width: 48, height: 30, initialPopulation: 2, seed: 42 };
+const CONFIG = { width: 48, height: 30, initialPopulation: 2, seed: 7 };
 const persisted = loadPersisted();
 const engine = new SimulationEngine(CONFIG, persisted?.state ?? undefined);
 
@@ -36,118 +36,173 @@ function appearanceShade(c: Character, dl: number): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
 }
 
-// Draw one being as a small glowing creature — a body, a head with eyes, little
-// legs, and genome-driven markings. Not human: an organism of their own species
-// whose colour, build and pattern come from its inherited appearance genes.
+// Draw one being as a pixel-art creature tinted by its genome — body colour,
+// outline, eyes, legs and belly marking all derive from inherited genes, so
+// each lineage looks distinct and evolves over generations.
 function drawCreature(ctx: CanvasRenderingContext2D, px: number, py: number, r: number, c: Character, selected: boolean): void {
-  const color = appearanceColor(c);
-  const dark = appearanceShade(c, -26);
-  const light = appearanceShade(c, 26);
-  const form = c.appearance.form;
-  const bw = r * (1.15 - form * 0.4);
-  const bh = r * (0.85 + form * 0.6);
+  const body = appearanceColor(c);
+  const outline = appearanceShade(c, -30);
+  const belly = c.appearance.pattern > 0.5 ? appearanceShade(c, 24) : appearanceShade(c, -16);
+  const cols = CREATURE[0].length;
+  const rows = CREATURE.length;
+  // form gene stretches the creature taller or squatter
+  const cs = Math.max(1, (r * 2.6) / rows);
+  const spriteW = cols * cs;
+  const spriteH = rows * cs;
+  const x0 = px - spriteW / 2;
+  const y0 = py - spriteH / 2;
 
+  // soft glow
   ctx.save();
-  ctx.shadowColor = color;
-  ctx.shadowBlur = r > 3 ? Math.min(12, r * 1.3) : 0;
-  ctx.strokeStyle = selected ? "#ffffff" : "rgba(0,0,0,0.5)";
-  ctx.lineWidth = selected ? 2 : Math.max(1, r * 0.12);
-
-  // legs (behind body)
-  if (r > 4) {
-    ctx.strokeStyle = dark;
-    ctx.lineWidth = Math.max(1, r * 0.16);
-    ctx.beginPath();
-    ctx.moveTo(px - bw * 0.4, py + bh * 0.9);
-    ctx.lineTo(px - bw * 0.45, py + bh * 1.5);
-    ctx.moveTo(px + bw * 0.4, py + bh * 0.9);
-    ctx.lineTo(px + bw * 0.45, py + bh * 1.5);
-    ctx.stroke();
-    ctx.strokeStyle = selected ? "#ffffff" : "rgba(0,0,0,0.5)";
-    ctx.lineWidth = selected ? 2 : Math.max(1, r * 0.12);
-  }
-
-  // body
-  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.ellipse(px, py + r * 0.15, bw, bh, 0, 0, Math.PI * 2);
+  ctx.arc(px, py, r * 1.5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.stroke();
-
-  // head
-  const hr = r * 0.62;
-  const hy = py - bh * 0.7;
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = light;
-  ctx.beginPath();
-  ctx.arc(px, hy, hr, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  if (r > 4) {
-    // markings from the pattern gene
-    const ptn = c.appearance.pattern;
-    if (ptn > 0.6) {
-      ctx.fillStyle = dark;
-      ctx.beginPath();
-      ctx.ellipse(px, py + r * 0.3, bw * 0.45, bh * 0.42, 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (ptn < 0.35) {
-      ctx.fillStyle = dark;
-      for (let k = 0; k < 3; k += 1) {
-        const a = k * 2.1;
-        ctx.beginPath();
-        ctx.arc(px + Math.cos(a) * bw * 0.4, py + r * 0.15 + Math.sin(a) * bh * 0.4, Math.max(0.8, r * 0.13), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    // eyes
-    ctx.fillStyle = "#14161b";
-    const ex = hr * 0.42;
-    const ey = hy - hr * 0.05;
-    const er = Math.max(0.9, hr * 0.22);
-    ctx.beginPath();
-    ctx.arc(px - ex, ey, er, 0, Math.PI * 2);
-    ctx.arc(px + ex, ey, er, 0, Math.PI * 2);
-    ctx.fill();
-  }
   ctx.restore();
+
+  const cell = Math.ceil(cs) + 0.5;
+  for (let ry = 0; ry < rows; ry += 1) {
+    const line = CREATURE[ry];
+    for (let cx = 0; cx < cols; cx += 1) {
+      const ch = line[cx];
+      if (ch === " ") continue;
+      let color = body;
+      if (ch === "o") color = outline;
+      else if (ch === "e") color = "#14161b";
+      else if (ch === "l") color = outline;
+      else if (ch === "p") color = belly;
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.floor(x0 + cx * cs), Math.floor(y0 + ry * cs), cell, cell);
+    }
+  }
 
   if (selected) {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(px, py, r + 6, 0, Math.PI * 2);
+    ctx.arc(px, py, Math.max(spriteW, spriteH) / 2 + 4, 0, Math.PI * 2);
     ctx.stroke();
   }
 }
 
-function terrainBase(tile: Tile): [number, number, number] {
-  switch (tile.terrain) {
-    case "water":
-      return [46, 92, 134];
-    case "mountain":
-      return [120, 116, 126];
-    case "desert":
-      return [196, 176, 116];
-    case "forest":
-      return [52, 102, 60];
-    default:
-      return [98, 126, 78]; // plains
-  }
+// ---- pixel-art assets, authored in code (CC0) ----
+// Terrain is rendered from tiny 8x8 pixel tiles drawn once and cached, then
+// scaled up with image smoothing off so the pixels stay crisp. Beings are
+// pixel creatures tinted by their own genome (an off-the-shelf sprite couldn't
+// show their evolving, inherited appearance).
+
+const TILE = 8;
+const PAL: Record<string, { base: string; dark: string; light: string; extra: string }> = {
+  water: { base: "#2e5c86", dark: "#244a6e", light: "#3f6f9b", extra: "#9fc4e3" },
+  plains: { base: "#5e7a44", dark: "#4e6838", light: "#7a9655", extra: "#86a35e" },
+  forest: { base: "#3a6b3f", dark: "#274e30", light: "#4a7a48", extra: "#5b4327" },
+  desert: { base: "#c4b074", dark: "#ad9860", light: "#d8c78a", extra: "#b8a468" },
+  mountain: { base: "#78747e", dark: "#5d5a64", light: "#9a98a2", extra: "#d9d7df" },
+};
+const BASE_COLOR: Record<string, string> = {
+  water: "#2e5c86",
+  plains: "#5e7a44",
+  forest: "#3a6b3f",
+  desert: "#c4b074",
+  mountain: "#78747e",
+};
+
+const tileCache = new Map<string, HTMLCanvasElement>();
+
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
 }
 
-// Deterministic per-tile lightness jitter so terrain reads as textured ground
-// rather than flat blocks of colour.
-function tileFill(tile: Tile, x: number, y: number): string {
-  const [r, g, b] = terrainBase(tile);
-  const h = (x * 73856093) ^ (y * 19349663);
-  const j = (((h % 17) + 17) % 17) - 8; // -8..8
-  const fertLift = (tile.fertility - 0.4) * 12;
-  const d = j + fertLift;
-  const cl = (v: number) => Math.max(0, Math.min(255, Math.round(v + d)));
-  return `rgb(${cl(r)},${cl(g)},${cl(b)})`;
+function buildTile(terrain: string, variant: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = TILE;
+  canvas.height = TILE;
+  const x = canvas.getContext("2d")!;
+  const p = PAL[terrain] ?? PAL.plains;
+  const rnd = lcg(terrain.length * 131 + variant * 977 + 7);
+  const px = (cx: number, cy: number, color: string) => {
+    x.fillStyle = color;
+    x.fillRect(cx, cy, 1, 1);
+  };
+  x.fillStyle = p.base;
+  x.fillRect(0, 0, TILE, TILE);
+  // base speckle
+  for (let cy = 0; cy < TILE; cy += 1)
+    for (let cx = 0; cx < TILE; cx += 1) if (rnd() < 0.16) px(cx, cy, rnd() < 0.5 ? p.dark : p.light);
+
+  if (terrain === "water") {
+    for (const ry of [1, 4, 6]) {
+      const sx = Math.floor(rnd() * 4);
+      px(sx + 1, ry, p.light);
+      px(sx + 2, ry, p.extra);
+      px(sx + 5, ry, p.light);
+    }
+  } else if (terrain === "forest") {
+    const trees = 1 + Math.floor(rnd() * 2);
+    for (let t = 0; t < trees; t += 1) {
+      const tx = 1 + Math.floor(rnd() * 5);
+      const ty = 2 + Math.floor(rnd() * 4);
+      px(tx, ty, p.dark);
+      px(tx + 1, ty, p.dark);
+      px(tx, ty - 1, p.dark);
+      px(tx + 1, ty - 1, p.light);
+      px(tx, ty + 1, p.extra); // trunk
+    }
+  } else if (terrain === "mountain") {
+    // a little peak with a snowy tip
+    px(4, 1, p.extra);
+    px(3, 2, p.light);
+    px(4, 2, p.extra);
+    px(2, 3, p.light);
+    px(3, 3, p.light);
+    px(4, 3, p.dark);
+    for (let cx = 1; cx < 7; cx += 1) px(cx, 4, rnd() < 0.5 ? p.light : p.dark);
+  } else if (terrain === "desert") {
+    for (let i = 0; i < 4; i += 1) {
+      const dx = Math.floor(rnd() * TILE);
+      const dy = Math.floor(rnd() * TILE);
+      px(dx, dy, rnd() < 0.5 ? p.dark : p.light);
+    }
+  } else {
+    // plains: grass blades / specks
+    for (let i = 0; i < 5; i += 1) {
+      const gx = Math.floor(rnd() * TILE);
+      const gy = Math.floor(rnd() * TILE);
+      px(gx, gy, p.light);
+      if (rnd() < 0.4) px(gx, gy - 1, p.extra);
+    }
+  }
+  return canvas;
 }
+
+function getTile(terrain: string, variant: number): HTMLCanvasElement {
+  const key = `${terrain}:${variant}`;
+  let c = tileCache.get(key);
+  if (!c) {
+    c = buildTile(terrain, variant);
+    tileCache.set(key, c);
+  }
+  return c;
+}
+
+// 8x10 pixel-creature template. o=outline, b=body, e=eye, l=leg, p=belly mark.
+const CREATURE = [
+  " oooooo ",
+  "obbbbbbo",
+  "obebbebo",
+  "obbbbbbo",
+  " oooooo ",
+  "  obbo  ",
+  " obbbbo ",
+  " obppbo ",
+  " obbbbo ",
+  " l    l ",
+];
 
 function topActions(strategy: Record<Action, number>): string {
   return (Object.entries(strategy) as [Action, number][])
@@ -427,6 +482,7 @@ function MapView({
     const offY = cssH / 2 - cam.current.cy * ppt;
     params.current = { offX, offY, ppt };
 
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#06070a";
     ctx.fillRect(0, 0, cssW, cssH);
 
@@ -434,56 +490,20 @@ function MapView({
     const x1 = Math.min(sim.world.width - 1, Math.ceil((cssW - offX) / ppt));
     const y0 = Math.max(0, Math.floor(-offY / ppt));
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
+    const detailed = ppt >= 6;
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
         const tile = sim.world.tiles[y][x];
-        const tx = offX + x * ppt;
-        const ty = offY + y * ppt;
-        ctx.fillStyle = tileFill(tile, x, y);
-        ctx.fillRect(tx, ty, ppt + 1, ppt + 1);
-        // Light terrain texture when zoomed in enough to see it.
-        if (ppt >= 16) {
-          const cx = tx + ppt / 2;
-          const cy = ty + ppt / 2;
-          if (tile.terrain === "forest") {
-            ctx.fillStyle = "rgba(20,46,26,0.55)";
-            for (let k = 0; k < 3; k += 1) {
-              const ox = ((x * 31 + y * 17 + k * 53) % 10) / 10 - 0.5;
-              const oy = ((x * 13 + y * 41 + k * 29) % 10) / 10 - 0.5;
-              const px = cx + ox * ppt * 0.7;
-              const py = cy + oy * ppt * 0.7;
-              const s = ppt * 0.14;
-              ctx.beginPath();
-              ctx.moveTo(px, py - s);
-              ctx.lineTo(px + s, py + s);
-              ctx.lineTo(px - s, py + s);
-              ctx.closePath();
-              ctx.fill();
-            }
-          } else if (tile.terrain === "water") {
-            ctx.strokeStyle = "rgba(150,190,225,0.3)";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(tx + ppt * 0.2, cy);
-            ctx.lineTo(tx + ppt * 0.8, cy);
-            ctx.stroke();
-          } else if (tile.terrain === "mountain") {
-            ctx.fillStyle = "rgba(190,188,196,0.5)";
-            const s = ppt * 0.22;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy - s);
-            ctx.lineTo(cx + s, cy + s * 0.6);
-            ctx.lineTo(cx - s, cy + s * 0.6);
-            ctx.closePath();
-            ctx.fill();
-          } else if (tile.terrain === "desert") {
-            ctx.fillStyle = "rgba(150,132,84,0.5)";
-            for (let k = 0; k < 3; k += 1) {
-              const ox = ((x * 19 + y * 7 + k * 37) % 10) / 10 - 0.5;
-              const oy = ((x * 23 + y * 11 + k * 17) % 10) / 10 - 0.5;
-              ctx.fillRect(cx + ox * ppt * 0.6, cy + oy * ppt * 0.6, Math.max(1, ppt * 0.07), Math.max(1, ppt * 0.07));
-            }
-          }
+        const tx = Math.floor(offX + x * ppt);
+        const ty = Math.floor(offY + y * ppt);
+        const w = Math.ceil(ppt) + 1;
+        if (detailed) {
+          // Crisp pixel tile (smoothing off), variant chosen from position.
+          const variant = ((x * 7 + y * 13) % 3 + 3) % 3;
+          ctx.drawImage(getTile(tile.terrain, variant), 0, 0, TILE, TILE, tx, ty, w, w);
+        } else {
+          ctx.fillStyle = BASE_COLOR[tile.terrain] ?? "#5e7a44";
+          ctx.fillRect(tx, ty, w, w);
         }
       }
     }
