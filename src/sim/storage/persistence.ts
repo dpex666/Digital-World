@@ -1,6 +1,6 @@
 import { SimulationState } from "../core/types";
 
-const KEY = "digital-world-save-v3";
+const KEY = "digital-world-save-v4";
 
 export interface Persisted {
   savedAt: number; // wall-clock ms when last saved — used to keep the world growing while closed
