@@ -96,6 +96,7 @@ export function createCharacter(rng: Rng, location: Vec2, generation = 0, sex?: 
     strategy: freshStrategy(rng),
     lastAction: "forage",
     lastWellbeing: 60,
+    rewardBaseline: 2,
     memory: [],
     relationships: [],
     location,

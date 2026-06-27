@@ -1,10 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SimulationEngine } from "../sim/systems/simulation";
 import { Action, Character, Settlement, SimulationState, Tile } from "../sim/core/types";
-import { loadState, saveState } from "../sim/storage/persistence";
+import { loadPersisted, saveState } from "../sim/storage/persistence";
 
-const saved = loadState();
-const engine = new SimulationEngine({ width: 48, height: 30, initialPopulation: 2, seed: 42 }, saved ?? undefined);
+const persisted = loadPersisted();
+const engine = new SimulationEngine({ width: 48, height: 30, initialPopulation: 2, seed: 42 }, persisted?.state ?? undefined);
+
+// The world never resets. While the page is closed it keeps living: on reopen
+// we advance it by the real time that elapsed (about two days of its life per
+// real second away), capped so a long absence still loads quickly.
+const BG_TICKS_PER_SECOND = 2;
+const MAX_CATCHUP_TICKS = 12000;
+let caughtUpTicks = 0;
+if (persisted) {
+  const elapsedSec = Math.max(0, (Date.now() - persisted.savedAt) / 1000);
+  caughtUpTicks = Math.min(MAX_CATCHUP_TICKS, Math.floor(elapsedSec * BG_TICKS_PER_SECOND));
+  if (caughtUpTicks > 0) engine.step(caughtUpTicks);
+}
 
 // Viewing speeds — how fast we fast-forward through the world's time. The world
 // itself is autonomous; these only change how quickly we watch it unfold.
@@ -38,7 +50,10 @@ export function App(): JSX.Element {
   const [speed, setSpeed] = useState(16);
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
+  const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
   const saveCounter = useRef(0);
+  const latest = useRef(sim);
+  latest.current = sim;
 
   useEffect(() => {
     if (!observing) return;
@@ -48,8 +63,19 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     saveCounter.current += 1;
-    if (saveCounter.current % 20 === 0) saveState(sim);
+    if (saveCounter.current % 10 === 0) saveState(sim);
   }, [sim]);
+
+  // Persist on close so the world resumes — and keeps growing — next time.
+  useEffect(() => {
+    const onLeave = () => saveState(latest.current);
+    window.addEventListener("beforeunload", onLeave);
+    document.addEventListener("visibilitychange", onLeave);
+    return () => {
+      window.removeEventListener("beforeunload", onLeave);
+      document.removeEventListener("visibilitychange", onLeave);
+    };
+  }, []);
 
   const selectedChar = useMemo(
     () => sim.characters.find((c) => c.id === selectedCharId && c.alive) ?? null,
@@ -90,6 +116,16 @@ export function App(): JSX.Element {
           An autonomous civilisation that begins as two and grows, learns, and invents on its own. You are watching — not playing.
         </span>
       </div>
+
+      {caughtUp > 0 ? (
+        <div
+          onClick={() => setCaughtUp(0)}
+          style={{ marginTop: 8, padding: "6px 10px", background: "#1a2230", border: "1px solid #2c3a52", borderRadius: 6, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
+          title="dismiss"
+        >
+          ⏳ The world kept living while you were away — it advanced <b>{caughtUp}</b> days ({(caughtUp / 365).toFixed(1)} years) and never reset. (click to dismiss)
+        </div>
+      ) : null}
 
       <p style={{ color: "#aab", fontSize: 13, marginTop: 8 }}>
         Year <b>{m?.year ?? 0}</b> · Tick {sim.tick} · {sim.environment.season} · Climate <b>{sim.environment.climateEpoch}</b> (warmth{" "}

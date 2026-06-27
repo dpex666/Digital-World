@@ -42,6 +42,22 @@ Division of labour, the "discovery" of cultivation, the rise of builders and cra
 - **Climate epochs.** The world starts frozen and slowly thaws, pushing migration and adaptation.
 - **Evolution under selection.** Mortality and reproduction filter genetics, so intelligence, resilience and appearance drift and adapt across generations — differently in every world.
 
+## It never resets, and grows while closed
+
+The world is **persistent**. It is saved continuously and on close, and on reopen it **fast-forwards by the real time that elapsed while you were away** (about two days of its life per real second away, capped so a long absence still loads fast). So it always continues exactly where it left off — plus the life it lived in the background — and never restarts from scratch.
+
+> Today this persistence is per-browser (local storage). A single *globally shared* world that ticks 24/7 for every visitor is a natural next step and needs a small backend (a serverless tick + a shared store); the deterministic core is built so that can be added without changing the simulation.
+
+## Drives, not scripted responses
+
+A deliberate design choice pushes as much as possible out of "coded behaviour" and into *learning*. Beings are **not** told "eat when hungry → good" or "you have no shelter → build." Instead they have **felt drives** (hunger, thirst, cold) and a single learning rule, and they **discover** what resolves those drives:
+
+- Action value is **not hinted** — the only innate priors are physical feasibility and bodily capability. Whether cultivating or hunting is *worth it* is learned from reward.
+- Shelter-building arises from a **felt thermoregulatory drive** (cold urges shelter-seeking) that can override learned habit — a real organism's instinct, not a strategic rule.
+- Learning is **advantage-based and regularised**: an action is reinforced only by how much it beat the being's own running average, so the population *specialises* by body and surroundings (an agrarian majority with situational hunters and builders) rather than everyone doing the same thing or maxing out everything.
+
+This is the honest version of "self-learning": a minimal coded substrate (physics + drives + one learning rule) with the behaviour discovered on top — the same shape as biological learning.
+
 ## Architecture
 
 ```text

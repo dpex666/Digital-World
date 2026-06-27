@@ -263,35 +263,49 @@ export class SimulationEngine {
     return this.state.settlements.find((s) => s.id === c.settlementId)?.knowledge ?? 0;
   }
 
-  private affordance(c: Character, action: Action, tile: SimulationState["world"]["tiles"][0][0], home?: Household): number {
+  // Physical feasibility / bodily capability only — no strategic hints. Whether
+  // an action is *worth* doing is for the being to discover through reward.
+  private feasibility(c: Character, action: Action, home?: Household, tile?: SimulationState["world"]["tiles"][0][0]): number {
     switch (action) {
       case "cultivate":
-        // Worthless until the people invent ways to coax food from the soil;
-        // grows attractive as their own food techniques accumulate.
-        return 0.2 + tile.fertility * 0.7 + this.tech.foodYield * 1.4 + (this.hasStructure(c.householdId, "cultivation") ? 0.6 : 0);
+        return 1; // working the ground is always physically possible
       case "hunt":
-        return 0.45 + c.genetics.strength * 0.6 + c.personality.aggression * 0.3;
+        return 0.5 + c.genetics.strength * 0.6; // bodily capability
       case "build": {
-        const wood = (home?.storage.wood ?? 0) + (tile.resources.wood ?? 0);
-        const need = !this.hasStructure(c.householdId, "shelter") ? 1.4 : !this.hasStructure(c.householdId, "storage") ? 0.6 : 0.25;
-        return need * (wood > 4 ? 1 : 0.4) * (1 + this.tech.buildYield);
+        const wood = (home?.storage.wood ?? 0) + (tile?.resources.wood ?? 0);
+        return wood > 3 ? 1 : 0.3; // need material to build with
       }
       case "craft":
-        return 0.35 + c.intelligence * 0.4 + this.tech.toolYield * 1.2;
+        return 0.6;
       default:
-        return 1 + (tile.resources.food ?? 0) * 0.04; // forage: always viable
+        return 1; // forage
     }
+  }
+
+  // Innate drives a real organism *feels* — these add urgency that can override
+  // learned habit under stress (you will seek warmth when freezing). A felt
+  // state, not knowledge of one's possessions.
+  private drive(c: Character, action: Action): number {
+    if (action === "build") {
+      const env = this.state.environment;
+      const sheltered = this.hasStructure(c.householdId, "shelter");
+      const coldFelt = (1 - env.warmth) * (env.season === "winter" ? 1.3 : 0.8) * (sheltered ? 0.1 : 1);
+      return coldFelt * 2;
+    }
+    return 0;
   }
 
   // Collapse the agent's weighted possibilities into a single chosen action —
   // probabilistic, not a fixed rule. Learned strategy biases the draw; novelty
   // (curiosity) keeps exploration alive.
   private chooseAction(c: Character, tile: SimulationState["world"]["tiles"][0][0], home?: Household): Action {
-    const epsilon = 0.04 + 0.12 * c.personality.curiosity;
+    const epsilon = 0.03 + 0.07 * c.personality.curiosity;
     if (this.rng.next() < epsilon) return ACTIONS[this.rng.int(ACTIONS.length)];
     const weights = ACTIONS.map((a) => {
       const skill = (c.skills as unknown as Record<string, number>)[a] ?? 0.2;
-      return Math.pow(Math.max(0.05, c.strategy[a]), 1.5) * this.affordance(c, a, tile, home) * (0.6 + skill);
+      // Learned propensity × competence × physical feasibility, plus any innate
+      // drive pushing in additively (so a drive can win even with low habit).
+      return Math.pow(Math.max(0.05, c.strategy[a]), 1.5) * (0.6 + skill) * this.feasibility(c, a, home, tile) + this.drive(c, a);
     });
     const total = weights.reduce((s, w) => s + w, 0);
     let roll = this.rng.next() * total;
@@ -389,13 +403,29 @@ export class SimulationEngine {
     return c.health * 0.5 + (100 - c.needs.hunger) * 0.3 + (100 - c.needs.thirst) * 0.2 + c.needs.mood * 0.1;
   }
 
-  // Reinforcement: nudge the propensity for whatever was just done toward the
-  // change in wellbeing it produced. Good choices get reinforced and spread.
+  // Reinforcement with competition: nudge the propensity for whatever was just
+  // done toward the wellbeing it produced, then renormalise the whole vector to
+  // a fixed mean. Because the propensities must share a budget, reinforcing one
+  // action suppresses the rest — so beings *specialise* by body and context
+  // (the strong drift to hunting, those on fertile land to cultivation) rather
+  // than everyone maxing out everything.
   private learn(c: Character, produced: number): void {
     const after = this.wellbeing(c);
-    const reward = produced * 3 + (after - c.lastWellbeing) * 0.5;
-    const lr = 0.015 * (0.5 + c.personality.curiosity);
-    c.strategy[c.lastAction] = Math.max(0.1, Math.min(6, c.strategy[c.lastAction] + lr * Math.max(-3, Math.min(5, reward)) * 0.1));
+    const reward = produced * 1.5 + (after - c.lastWellbeing) * 0.2;
+    // Advantage learning: reinforce only by how much this action beat the
+    // being's *own running average*. Better-than-usual choices rise, worse fall
+    // — so it can't push everything to the ceiling, and beings differentiate by
+    // body and surroundings into genuine trades.
+    const advantage = reward - c.rewardBaseline;
+    const lr = 0.03 * (0.5 + c.personality.curiosity);
+    c.strategy[c.lastAction] += lr * Math.max(-3, Math.min(3, advantage));
+    c.rewardBaseline += 0.05 * (reward - c.rewardBaseline);
+    // Light pull toward the being's mean keeps a mix alive (no trade dies out).
+    const mean = ACTIONS.reduce((s, a) => s + c.strategy[a], 0) / ACTIONS.length;
+    for (const a of ACTIONS) {
+      c.strategy[a] += 0.015 * (mean - c.strategy[a]);
+      c.strategy[a] = Math.max(0.1, Math.min(4, c.strategy[a]));
+    }
     c.lastWellbeing = after;
   }
 
@@ -521,8 +551,10 @@ export class SimulationEngine {
     let best: Character | undefined;
     let bestScore = -Infinity;
     for (const o of candidates) {
+      // Pairing follows *felt* affinity built through shared interaction — a
+      // being cannot read another's fertility or health genes, so it doesn't.
       const rel = c.relationships.find((r) => r.targetId === o.id);
-      const score = (rel?.affinity ?? 0) + o.health / 200 + o.genetics.fertility * 0.3 + this.rng.range(0, 0.4);
+      const score = (rel?.affinity ?? 0) * 2 + this.rng.range(0, 0.5);
       if (score > bestScore) {
         bestScore = score;
         best = o;
@@ -572,9 +604,9 @@ export class SimulationEngine {
     const densityBrake = Math.max(0.08, 1 - this.popNow / capacity);
     // Founder boom: a tiny population breeds fast (r-selection), then growth
     // self-throttles as numbers approach the land's carrying capacity.
-    const earlyBoom = 1 + 7 * Math.max(0, 1 - this.popNow / 70);
+    const earlyBoom = 1 + 7 * Math.max(0, 1 - this.popNow / 90);
 
-    const chance = 0.025 * c.genetics.fertility * mate.genetics.fertility * security * warmthFert * healthMult *
+    const chance = 0.03 * c.genetics.fertility * mate.genetics.fertility * security * warmthFert * healthMult *
       densityBrake * earlyBoom * (1 + this.tech.fertility);
     if (this.rng.next() < chance) {
       c.pregnantBy = mate.id;
@@ -628,7 +660,7 @@ export class SimulationEngine {
     // The two genesis progenitors are shielded from death until their colony
     // takes hold — without this, a single unlucky tick ends the whole species
     // before it can begin. Once the population establishes, they are mortal.
-    if (c.lineage.generation === 0 && this.popNow < 15) {
+    if (c.lineage.generation === 0 && this.popNow < 20) {
       c.health = Math.max(c.health, 25);
       return;
     }
@@ -648,7 +680,7 @@ export class SimulationEngine {
       const pAccident = (0.00003 + tile.hazard * 0.0005 + this.state.environment.weather.storm * 0.0004) * medicine * shield;
       const home = this.household(c.householdId);
       const hungryHome = home && (home.storage.food ?? 0) < 1;
-      const pInfant = c.lifeStage === "infant" ? (hungryHome ? 0.004 : 0.0006) * medicine : 0;
+      const pInfant = c.lifeStage === "infant" ? (hungryHome ? 0.0025 : 0.0004) * medicine * shield : 0;
       const roll = this.rng.next();
       if (roll < pAge) cause = "old age";
       else if (roll < pAge + pAccident) cause = "an accident";

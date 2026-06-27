@@ -102,6 +102,7 @@ export interface Character {
   strategy: Record<Action, number>;
   lastAction: Action;
   lastWellbeing: number;
+  rewardBaseline: number;
   memory: MemoryEntry[];
   relationships: Relationship[];
   location: Vec2;
