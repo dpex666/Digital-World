@@ -247,6 +247,16 @@ export interface Epoch {
   techThreshold: number;
 }
 
+// A transient link between two settlements, for the observatory to animate
+// (a trade caravan or a raid). Carries the tick it happened so the renderer can
+// fade it out.
+export interface WorldLink {
+  from: Vec2;
+  to: Vec2;
+  kind: "trade" | "raid";
+  tick: number;
+}
+
 export interface HistoryEvent {
   id: ID;
   tick: number;
@@ -292,6 +302,7 @@ export interface SimulationState {
   households: Household[];
   settlements: Settlement[];
   nextSettlementNum: number;
+  links: WorldLink[];
   history: HistoryEvent[];
   metrics: MetricsSnapshot[];
 }

@@ -337,7 +337,7 @@ export function App(): JSX.Element {
 
       <div className="dw-layout">
         <div style={{ minWidth: 0 }}>
-          <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} />
+          <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} speed={speed} />
 
           <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
             <Swatch c="rgb(46,92,134)" label="water" />
@@ -460,11 +460,13 @@ function MapView({
   selectedCharId,
   onSelect,
   zoom,
+  speed,
 }: {
   sim: SimulationState;
   selectedCharId: string | null;
   onSelect: (id: string) => void;
   zoom: number;
+  speed: number;
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -601,6 +603,50 @@ function MapView({
       }
     }
 
+    // Transient links between settlements: teal caravans for trade, red flashes
+    // for raids. TTL scales with view speed so they stay visible ~1s of real
+    // time whether we're watching at 1x or 60x.
+    const ttl = Math.max(20, speed * 14);
+    for (const link of sim.links) {
+      const age = sim.tick - link.tick;
+      if (age < 0 || age > ttl) continue;
+      const op = 1 - age / ttl;
+      const fx = offX + (link.from.x + 0.5) * ppt;
+      const fy = offY + (link.from.y + 0.5) * ppt;
+      const tx = offX + (link.to.x + 0.5) * ppt;
+      const ty = offY + (link.to.y + 0.5) * ppt;
+      if (link.kind === "trade") {
+        ctx.strokeStyle = `rgba(127,214,192,${(op * 0.8).toFixed(3)})`;
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const t = age / ttl; // caravan glides from sender to receiver
+        const mx = fx + (tx - fx) * t;
+        const my = fy + (ty - fy) * t;
+        ctx.fillStyle = `rgba(190,245,225,${op.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, Math.max(2, ppt * 0.13), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = `rgba(239,111,111,${(op * 0.85).toFixed(3)})`;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        // expanding flash at the victim
+        ctx.strokeStyle = `rgba(255,120,110,${op.toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(tx, ty, ppt * (0.4 + (1 - op) * 1.8), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // Beings — little glowing creatures coloured by their genome (their own
     // species, not human), fanned out when several share a tile.
     const stacked = new Map<string, number>();
@@ -616,7 +662,7 @@ function MapView({
       const r = Math.max(2.5, ppt * 0.26 * (0.75 + c.appearance.size) * stageScale);
       drawCreature(ctx, px, py, r, c, c.id === selectedCharId);
     }
-  }, [sim, selectedCharId, zoom]);
+  }, [sim, selectedCharId, zoom, speed]);
 
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     const canvas = canvasRef.current;
