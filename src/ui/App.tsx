@@ -3,12 +3,16 @@ import { SimulationEngine } from "../sim/systems/simulation";
 import { Action, Character, Settlement, SimulationState, Tile } from "../sim/core/types";
 import { loadPersisted, saveState } from "../sim/storage/persistence";
 
+const CONFIG = { width: 48, height: 30, initialPopulation: 2, seed: 42 };
 const persisted = loadPersisted();
-const engine = new SimulationEngine({ width: 48, height: 30, initialPopulation: 2, seed: 42 }, persisted?.state ?? undefined);
+// `engine` is reassignable: in shared mode we re-seed it from the authoritative
+// server world on each sync, then animate locally between syncs.
+let engine = new SimulationEngine(CONFIG, persisted?.state ?? undefined);
 
 // The world never resets. While the page is closed it keeps living: on reopen
 // we advance it by the real time that elapsed (about two days of its life per
-// real second away), capped so a long absence still loads quickly.
+// real second away), capped so a long absence still loads quickly. (Local mode
+// only; in shared mode the server is the source of truth.)
 const BG_TICKS_PER_SECOND = 2;
 const MAX_CATCHUP_TICKS = 12000;
 let caughtUpTicks = 0;
@@ -16,6 +20,10 @@ if (persisted) {
   const elapsedSec = Math.max(0, (Date.now() - persisted.savedAt) / 1000);
   caughtUpTicks = Math.min(MAX_CATCHUP_TICKS, Math.floor(elapsedSec * BG_TICKS_PER_SECOND));
   if (caughtUpTicks > 0) engine.step(caughtUpTicks);
+}
+
+function adoptServerWorld(state: SimulationState): void {
+  engine = new SimulationEngine(CONFIG, state);
 }
 
 // Viewing speeds — how fast we fast-forward through the world's time. The world
@@ -51,9 +59,47 @@ export function App(): JSX.Element {
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
   const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
+  const [mode, setMode] = useState<"connecting" | "shared" | "local">("connecting");
   const saveCounter = useRef(0);
   const latest = useRef(sim);
   latest.current = sim;
+
+  // Decide on load: is there a single shared world on the server? If so, follow
+  // it; otherwise run this browser's own local world. Either way the site works.
+  useEffect(() => {
+    let cancelled = false;
+    let poll: number | undefined;
+    fetch("/api/world")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("no api"))))
+      .then((data) => {
+        if (cancelled) return;
+        if (data && data.shared && data.state) {
+          adoptServerWorld(data.state as SimulationState);
+          setSim({ ...engine.state });
+          setMode("shared");
+          setCaughtUp(0);
+          poll = window.setInterval(() => {
+            fetch("/api/world")
+              .then((r) => r.json())
+              .then((d) => {
+                if (!cancelled && d && d.shared && d.state) {
+                  adoptServerWorld(d.state as SimulationState);
+                }
+              })
+              .catch(() => {});
+          }, 6000);
+        } else {
+          setMode("local");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMode("local");
+      });
+    return () => {
+      cancelled = true;
+      if (poll) window.clearInterval(poll);
+    };
+  }, []);
 
   useEffect(() => {
     if (!observing) return;
@@ -61,13 +107,15 @@ export function App(): JSX.Element {
     return () => window.clearInterval(handle);
   }, [observing, speed]);
 
+  // Local mode keeps the world in this browser; shared mode is server-authoritative.
   useEffect(() => {
+    if (mode !== "local") return;
     saveCounter.current += 1;
     if (saveCounter.current % 10 === 0) saveState(sim);
-  }, [sim]);
+  }, [sim, mode]);
 
-  // Persist on close so the world resumes — and keeps growing — next time.
   useEffect(() => {
+    if (mode !== "local") return;
     const onLeave = () => saveState(latest.current);
     window.addEventListener("beforeunload", onLeave);
     document.addEventListener("visibilitychange", onLeave);
@@ -75,7 +123,7 @@ export function App(): JSX.Element {
       window.removeEventListener("beforeunload", onLeave);
       document.removeEventListener("visibilitychange", onLeave);
     };
-  }, []);
+  }, [mode]);
 
   const selectedChar = useMemo(
     () => sim.characters.find((c) => c.id === selectedCharId && c.alive) ?? null,
@@ -114,6 +162,19 @@ export function App(): JSX.Element {
         <h1 style={{ margin: 0, fontSize: 22 }}>Digital World</h1>
         <span style={{ color: "#8a8f98", fontSize: 13 }}>
           An autonomous civilisation that begins as two and grows, learns, and invents on its own. You are watching — not playing.
+        </span>
+        <span
+          title={mode === "shared" ? "One world, shared by everyone, growing 24/7" : mode === "local" ? "This browser's own world" : "connecting…"}
+          style={{
+            fontSize: 11,
+            padding: "2px 8px",
+            borderRadius: 10,
+            border: "1px solid #2c3a52",
+            color: mode === "shared" ? "#8fd0a8" : "#9aa",
+            background: "#10141c",
+          }}
+        >
+          {mode === "shared" ? "● shared world" : mode === "local" ? "○ local world" : "… connecting"}
         </span>
       </div>
 
