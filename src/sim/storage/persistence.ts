@@ -1,19 +1,34 @@
 import { SimulationState } from "../core/types";
 
-const KEY = "digital-world-save";
+const KEY = "digital-world-save-v3";
 
-export function saveState(state: SimulationState): void {
-  localStorage.setItem(KEY, JSON.stringify(state));
+export interface Persisted {
+  savedAt: number; // wall-clock ms when last saved — used to keep the world growing while closed
+  state: SimulationState;
 }
 
-export function loadState(): SimulationState | null {
+export function saveState(state: SimulationState): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ savedAt: Date.now(), state }));
+  } catch {
+    /* storage full or unavailable — the world simply continues in memory */
+  }
+}
+
+export function loadPersisted(): Persisted | null {
   const raw = localStorage.getItem(KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as SimulationState;
+    const parsed = JSON.parse(raw) as Persisted;
+    if (parsed && parsed.state && typeof parsed.savedAt === "number") return parsed;
+    return null;
   } catch {
     return null;
   }
+}
+
+export function loadState(): SimulationState | null {
+  return loadPersisted()?.state ?? null;
 }
 
 export function exportState(state: SimulationState): string {
