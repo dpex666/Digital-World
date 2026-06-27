@@ -777,6 +777,128 @@ export class SimulationEngine {
     }
   }
 
+  // ----------------------------------------------- inter-settlement relations
+
+  private settlementHomes(s: Settlement): Household[] {
+    return s.householdIds
+      .map((id) => this.state.households.find((h) => h.id === id))
+      .filter((h): h is Household => !!h);
+  }
+
+  private settlementFood(s: Settlement): number {
+    return this.settlementHomes(s).reduce((t, h) => t + (h.storage.food ?? 0), 0);
+  }
+
+  private settlementFoodPer(s: Settlement): number {
+    return this.settlementFood(s) / Math.max(1, s.memberIds.length);
+  }
+
+  // Fighting strength: adults count fully, the young and old far less.
+  private settlementForce(s: Settlement): number {
+    return s.memberIds.reduce((t, id) => {
+      const m = this.byId.get(id);
+      if (!m || !m.alive) return t;
+      const adult = m.lifeStage === "adult" || m.lifeStage === "elder";
+      return t + m.genetics.strength * (adult ? 1 : 0.25);
+    }, 0);
+  }
+
+  private moveFood(from: Settlement, to: Settlement, amount: number): number {
+    const fromH = this.settlementHomes(from);
+    const total = this.settlementFood(from);
+    if (total <= 0 || amount <= 0) return 0;
+    const frac = Math.min(1, amount / total);
+    let moved = 0;
+    for (const h of fromH) {
+      const take = (h.storage.food ?? 0) * frac;
+      h.storage.food = (h.storage.food ?? 0) - take;
+      moved += take;
+    }
+    const toH = this.settlementHomes(to);
+    if (toH.length) {
+      const each = moved / toH.length;
+      for (const h of toH) h.storage.food = (h.storage.food ?? 0) + each;
+    }
+    return moved;
+  }
+
+  // Each tick, neighbouring settlements may trade or raid, driven by their own
+  // emergent cultures (trade preference vs. aggression) and how hungry they are.
+  private interSettlement(): void {
+    const sets = this.state.settlements.filter((s) => s.memberIds.length >= 3);
+    const food = this.state.elements.food.name;
+    for (let i = 0; i < sets.length; i += 1) {
+      for (let j = i + 1; j < sets.length; j += 1) {
+        const a = sets[i];
+        const b = sets[j];
+        const dist = Math.abs(a.center.x - b.center.x) + Math.abs(a.center.y - b.center.y);
+        if (dist > 20) continue;
+        const proximity = 1 - dist / 20;
+        const tradeDrive = (a.culture.tradePreference + b.culture.tradePreference) / 2;
+        const hostility = (a.culture.aggression + b.culture.aggression) / 2;
+        const aPer = this.settlementFoodPer(a);
+        const bPer = this.settlementFoodPer(b);
+        const gap = Math.abs(aPer - bPer);
+        const scarcity = Math.max(0, 1 - Math.min(aPer, bPer) / 3);
+
+        // Border friction: close, hungry neighbours grow warier of each other.
+        if (proximity > 0.3 && scarcity > 0.45) {
+          a.culture.aggression = Math.min(1, a.culture.aggression + 0.004);
+          b.culture.aggression = Math.min(1, b.culture.aggression + 0.004);
+        }
+
+        const r = this.rng.next();
+        // Raids are driven mostly by hostility and proximity (territory and
+        // loot), with hunger sharpening them — but kept occasional so war is
+        // dramatic, not a constant population-crusher.
+        const raidChance = 0.03 * proximity * hostility * (0.4 + scarcity);
+        const tradeChance = 0.05 * proximity * tradeDrive * Math.min(1, gap / 3);
+
+        if (hostility > 0.28 && r < raidChance) {
+          this.raid(a, b, food);
+        } else if (gap > 1.5 && r < raidChance + tradeChance) {
+          const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
+          const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length);
+          if (amount > 0.5) {
+            rich.knowledge = Math.min(8, rich.knowledge + 0.02);
+            poor.knowledge = Math.min(8, poor.knowledge + 0.03);
+            rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
+            poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
+            // Trade is constant; only chronicle it now and then so the feed stays varied.
+            if (this.rng.next() < 0.2) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
+          }
+        }
+      }
+    }
+  }
+
+  private raid(a: Settlement, b: Settlement, food: string): void {
+    const [agg, vic] = this.settlementForce(a) >= this.settlementForce(b) ? [a, b] : [b, a];
+    const loot = this.moveFood(vic, agg, this.settlementFood(vic) * 0.22);
+    let killed = 0;
+    for (const id of vic.memberIds) {
+      const m = this.byId.get(id);
+      if (!m || !m.alive) continue;
+      if (this.rng.next() < 0.06) {
+        m.health -= this.rng.range(4, 12);
+        if (m.health <= 0) {
+          this.kill(m, `a raid by ${agg.name}`);
+          killed += 1;
+        }
+      }
+    }
+    for (const id of agg.memberIds) {
+      const m = this.byId.get(id);
+      if (m && m.alive && this.rng.next() < 0.04) m.health = Math.max(1, m.health - this.rng.range(2, 8));
+    }
+    vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
+    agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
+    this.log(
+      "conflict",
+      `${agg.name} raided ${vic.name}, seizing ${loot.toFixed(0)} ${food}${killed ? ` and leaving ${killed} dead` : ""}.`,
+    );
+  }
+
   // ----------------------------------------------------------- settlements
 
   private updateSettlements(): void {
@@ -890,7 +1012,7 @@ export class SimulationEngine {
       const transfer = gap * share * 0.5;
       richest.storage.food = (richest.storage.food ?? 0) - transfer;
       poorest.storage.food = (poorest.storage.food ?? 0) + transfer;
-      if (this.rng.next() < 0.02) this.log("trade", `${s.name} shared food across its households.`);
+      if (this.rng.next() < 0.005) this.log("settlement", `${s.name} shared food across its households.`);
     }
   }
 
@@ -1051,6 +1173,17 @@ export class SimulationEngine {
         produced.set(c.id, this.act(c));
       }
       for (const home of this.state.households) this.tryBuild(home);
+      // Stores are finite — surplus beyond what a household (and its storehouse)
+      // can keep spoils. This bounds hoarding and keeps scarcity, trade and raid
+      // stakes real.
+      for (const home of this.state.households) {
+        const members = home.memberIds.filter((id) => this.byId.get(id)?.alive).length;
+        const cap = 40 + members * 30 + (this.hasStructure(home.id, "storage") ? 150 : 0);
+        if ((home.storage.food ?? 0) > cap) home.storage.food = cap;
+        if ((home.storage.water ?? 0) > cap) home.storage.water = cap;
+        if ((home.storage.wood ?? 0) > 60) home.storage.wood = 60;
+        if ((home.storage.stone ?? 0) > 40) home.storage.stone = 40;
+      }
       for (const c of snapshot) {
         this.consume(c);
         this.learn(c, produced.get(c.id) ?? 0);
@@ -1069,6 +1202,7 @@ export class SimulationEngine {
       for (const home of this.state.households) this.maybeMigrate(home);
 
       this.updateSettlements();
+      this.interSettlement();
       this.advanceResearch();
       this.pushMetrics();
       this.prune();

@@ -22,7 +22,8 @@ export type EventCategory =
   | "decision"
   | "discovery"
   | "epoch"
-  | "trade";
+  | "trade"
+  | "conflict";
 
 export interface Vec2 {
   x: number;
