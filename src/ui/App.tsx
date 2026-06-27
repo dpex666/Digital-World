@@ -30,21 +30,123 @@ function appearanceColor(c: Character): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(45 + a.luminance * 35)}%)`;
 }
 
-// Calmer terrain so the glowing beings stand out against it.
-function mutedTileColor(tile: Tile): string {
-  const food = tile.resources.food ?? 0;
+function appearanceShade(c: Character, dl: number): string {
+  const a = c.appearance;
+  const l = Math.max(8, Math.min(92, 45 + a.luminance * 35 + dl));
+  return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
+}
+
+// Draw one being as a small glowing creature — a body, a head with eyes, little
+// legs, and genome-driven markings. Not human: an organism of their own species
+// whose colour, build and pattern come from its inherited appearance genes.
+function drawCreature(ctx: CanvasRenderingContext2D, px: number, py: number, r: number, c: Character, selected: boolean): void {
+  const color = appearanceColor(c);
+  const dark = appearanceShade(c, -26);
+  const light = appearanceShade(c, 26);
+  const form = c.appearance.form;
+  const bw = r * (1.15 - form * 0.4);
+  const bh = r * (0.85 + form * 0.6);
+
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = r > 3 ? Math.min(12, r * 1.3) : 0;
+  ctx.strokeStyle = selected ? "#ffffff" : "rgba(0,0,0,0.5)";
+  ctx.lineWidth = selected ? 2 : Math.max(1, r * 0.12);
+
+  // legs (behind body)
+  if (r > 4) {
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = Math.max(1, r * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(px - bw * 0.4, py + bh * 0.9);
+    ctx.lineTo(px - bw * 0.45, py + bh * 1.5);
+    ctx.moveTo(px + bw * 0.4, py + bh * 0.9);
+    ctx.lineTo(px + bw * 0.45, py + bh * 1.5);
+    ctx.stroke();
+    ctx.strokeStyle = selected ? "#ffffff" : "rgba(0,0,0,0.5)";
+    ctx.lineWidth = selected ? 2 : Math.max(1, r * 0.12);
+  }
+
+  // body
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(px, py + r * 0.15, bw, bh, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // head
+  const hr = r * 0.62;
+  const hy = py - bh * 0.7;
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = light;
+  ctx.beginPath();
+  ctx.arc(px, hy, hr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  if (r > 4) {
+    // markings from the pattern gene
+    const ptn = c.appearance.pattern;
+    if (ptn > 0.6) {
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.ellipse(px, py + r * 0.3, bw * 0.45, bh * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (ptn < 0.35) {
+      ctx.fillStyle = dark;
+      for (let k = 0; k < 3; k += 1) {
+        const a = k * 2.1;
+        ctx.beginPath();
+        ctx.arc(px + Math.cos(a) * bw * 0.4, py + r * 0.15 + Math.sin(a) * bh * 0.4, Math.max(0.8, r * 0.13), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // eyes
+    ctx.fillStyle = "#14161b";
+    const ex = hr * 0.42;
+    const ey = hy - hr * 0.05;
+    const er = Math.max(0.9, hr * 0.22);
+    ctx.beginPath();
+    ctx.arc(px - ex, ey, er, 0, Math.PI * 2);
+    ctx.arc(px + ex, ey, er, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  if (selected) {
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, r + 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function terrainBase(tile: Tile): [number, number, number] {
   switch (tile.terrain) {
     case "water":
-      return "#27456b";
+      return [46, 92, 134];
     case "mountain":
-      return "#474751";
+      return [120, 116, 126];
     case "desert":
-      return "#9c8b56";
+      return [196, 176, 116];
     case "forest":
-      return food > 8 ? "#2c5b36" : "#26492e";
+      return [52, 102, 60];
     default:
-      return food > 8 ? "#43623c" : "#374e32";
+      return [98, 126, 78]; // plains
   }
+}
+
+// Deterministic per-tile lightness jitter so terrain reads as textured ground
+// rather than flat blocks of colour.
+function tileFill(tile: Tile, x: number, y: number): string {
+  const [r, g, b] = terrainBase(tile);
+  const h = (x * 73856093) ^ (y * 19349663);
+  const j = (((h % 17) + 17) % 17) - 8; // -8..8
+  const fertLift = (tile.fertility - 0.4) * 12;
+  const d = j + fertLift;
+  const cl = (v: number) => Math.max(0, Math.min(255, Math.round(v + d)));
+  return `rgb(${cl(r)},${cl(g)},${cl(b)})`;
 }
 
 function topActions(strategy: Record<Action, number>): string {
@@ -148,12 +250,12 @@ export function App(): JSX.Element {
           <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} />
 
           <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
-            <Swatch c="#27456b" label="water" />
-            <Swatch c="#474751" label="mountain" />
-            <Swatch c="#9c8b56" label="desert" />
-            <Swatch c="#2c5b36" label="forest" />
-            <Swatch c="#43623c" label="plains" />
-            <span style={{ marginLeft: 6 }}>◆ beings (coloured by their evolving genome) · ⌂ structures · ◯ settlements</span>
+            <Swatch c="rgb(46,92,134)" label="water" />
+            <Swatch c="rgb(120,116,126)" label="mountain" />
+            <Swatch c="rgb(196,176,116)" label="desert" />
+            <Swatch c="rgb(52,102,60)" label="forest" />
+            <Swatch c="rgb(98,126,78)" label="plains" />
+            <span style={{ marginLeft: 6 }}>beings are little creatures coloured by their evolving genome · ⌂ structures · ◯ settlements</span>
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
@@ -334,8 +436,55 @@ function MapView({
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
-        ctx.fillStyle = mutedTileColor(sim.world.tiles[y][x]);
-        ctx.fillRect(offX + x * ppt, offY + y * ppt, ppt + 1, ppt + 1);
+        const tile = sim.world.tiles[y][x];
+        const tx = offX + x * ppt;
+        const ty = offY + y * ppt;
+        ctx.fillStyle = tileFill(tile, x, y);
+        ctx.fillRect(tx, ty, ppt + 1, ppt + 1);
+        // Light terrain texture when zoomed in enough to see it.
+        if (ppt >= 16) {
+          const cx = tx + ppt / 2;
+          const cy = ty + ppt / 2;
+          if (tile.terrain === "forest") {
+            ctx.fillStyle = "rgba(20,46,26,0.55)";
+            for (let k = 0; k < 3; k += 1) {
+              const ox = ((x * 31 + y * 17 + k * 53) % 10) / 10 - 0.5;
+              const oy = ((x * 13 + y * 41 + k * 29) % 10) / 10 - 0.5;
+              const px = cx + ox * ppt * 0.7;
+              const py = cy + oy * ppt * 0.7;
+              const s = ppt * 0.14;
+              ctx.beginPath();
+              ctx.moveTo(px, py - s);
+              ctx.lineTo(px + s, py + s);
+              ctx.lineTo(px - s, py + s);
+              ctx.closePath();
+              ctx.fill();
+            }
+          } else if (tile.terrain === "water") {
+            ctx.strokeStyle = "rgba(150,190,225,0.3)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(tx + ppt * 0.2, cy);
+            ctx.lineTo(tx + ppt * 0.8, cy);
+            ctx.stroke();
+          } else if (tile.terrain === "mountain") {
+            ctx.fillStyle = "rgba(190,188,196,0.5)";
+            const s = ppt * 0.22;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - s);
+            ctx.lineTo(cx + s, cy + s * 0.6);
+            ctx.lineTo(cx - s, cy + s * 0.6);
+            ctx.closePath();
+            ctx.fill();
+          } else if (tile.terrain === "desert") {
+            ctx.fillStyle = "rgba(150,132,84,0.5)";
+            for (let k = 0; k < 3; k += 1) {
+              const ox = ((x * 19 + y * 7 + k * 37) % 10) / 10 - 0.5;
+              const oy = ((x * 23 + y * 11 + k * 17) % 10) / 10 - 0.5;
+              ctx.fillRect(cx + ox * ppt * 0.6, cy + oy * ppt * 0.6, Math.max(1, ppt * 0.07), Math.max(1, ppt * 0.07));
+            }
+          }
+        }
       }
     }
 
@@ -371,47 +520,20 @@ function MapView({
       }
     }
 
-    // Beings — glowing, shape-varied creatures coloured by their genome.
+    // Beings — little glowing creatures coloured by their genome (their own
+    // species, not human), fanned out when several share a tile.
     const stacked = new Map<string, number>();
     for (const c of alive) {
       const key = `${c.location.x}:${c.location.y}`;
       const i = stacked.get(key) ?? 0;
       stacked.set(key, i + 1);
       const ang = i * 2.39996;
-      const spread = i ? Math.min(ppt * 0.34, 2.5 + i * 1.2) : 0;
+      const spread = i ? Math.min(ppt * 0.4, 3 + i * 1.4) : 0;
       const px = offX + (c.location.x + 0.5) * ppt + Math.cos(ang) * spread;
       const py = offY + (c.location.y + 0.5) * ppt + Math.sin(ang) * spread;
-      const stageScale = c.lifeStage === "infant" ? 0.5 : c.lifeStage === "child" ? 0.72 : c.lifeStage === "elder" ? 0.88 : 1;
-      const r = Math.max(2.5, ppt * 0.24 * (0.7 + c.appearance.size) * stageScale);
-      const sel = c.id === selectedCharId;
-      ctx.save();
-      ctx.shadowColor = appearanceColor(c);
-      ctx.shadowBlur = Math.min(14, r * 1.6);
-      ctx.fillStyle = appearanceColor(c);
-      ctx.strokeStyle = sel ? "#ffffff" : "rgba(0,0,0,0.45)";
-      ctx.lineWidth = sel ? 2 : 1;
-      ctx.beginPath();
-      const form = c.appearance.form;
-      if (form < 0.33) {
-        ctx.rect(px - r, py - r, r * 2, r * 2);
-      } else if (form < 0.66) {
-        ctx.arc(px, py, r, 0, Math.PI * 2);
-      } else {
-        ctx.moveTo(px, py - r);
-        ctx.lineTo(px + r, py + r);
-        ctx.lineTo(px - r, py + r);
-        ctx.closePath();
-      }
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-      if (sel) {
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(px, py, r + 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
+      const stageScale = c.lifeStage === "infant" ? 0.5 : c.lifeStage === "child" ? 0.72 : c.lifeStage === "elder" ? 0.9 : 1;
+      const r = Math.max(2.5, ppt * 0.26 * (0.75 + c.appearance.size) * stageScale);
+      drawCreature(ctx, px, py, r, c, c.id === selectedCharId);
     }
   }, [sim, selectedCharId, zoom]);
 
