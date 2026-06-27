@@ -44,20 +44,9 @@ Division of labour, the "discovery" of cultivation, the rise of builders and cra
 
 ## It never resets, and grows while closed
 
-The world is **persistent**. It is saved continuously and on close, and on reopen it **fast-forwards by the real time that elapsed while you were away** (about two days of its life per real second away, capped so a long absence still loads fast). So it always continues exactly where it left off — plus the life it lived in the background — and never restarts from scratch.
+The world is **persistent in the browser**. It is saved continuously and on close, and on reopen it **fast-forwards by the real time that elapsed while you were away** (about two days of its life per real second away, capped so a long absence still loads fast). So it always continues exactly where it left off — plus the life it lived in the background — and never restarts from scratch.
 
-### Two modes of persistence
-
-- **Shared world (when a store is attached):** a single world that *every visitor sees*, advancing by real elapsed time on each request and via an hourly cron — so it grows 24/7, even when no one is watching. Served by `api/world.ts` (a Vercel serverless function) backed by an **Upstash Redis** store (what "Vercel KV" became). The header shows a **● shared world** badge.
-- **Local world (fallback):** if no store is configured, each browser grows its own world in local storage and catches up on reopen. The header shows **○ local world**. The site always works either way.
-
-### One-time setup for the shared world on Vercel
-
-1. Import the repo at **vercel.com/new** (zero config — it auto-detects Vite; the `api/` folder deploys as serverless functions).
-2. In the project: **Storage → Browse Storage → Marketplace → Upstash → Redis**, create a database and connect it to the project. (There is no "KV" tile anymore — Vercel renamed it; Upstash Redis is the same thing.) Connecting injects the REST URL/token env vars; the backend auto-detects whichever names are used (`KV_REST_API_*` or `UPSTASH_REDIS_REST_*`). That single step flips the site from local to shared. Redeploy if it was already deployed.
-3. The hourly cron in `vercel.json` keeps the world advancing with no traffic (cron frequency depends on your Vercel plan; compute-on-read advances it on every visit regardless).
-
-> Heads up: the serverless + KV path could not be exercised in the build sandbox (no Vercel runtime/KV there). It is written to degrade gracefully — if anything is misconfigured, visitors simply get the local world instead of an error.
+> This persistence is **per-browser** (local storage) — each visitor grows their own world. A single *globally shared* world that ticks 24/7 for everyone would need a server-side store (e.g. Upstash Redis), which costs money beyond a small free tier, so it's intentionally left out for now. The deterministic core is built so it can be added later without changing the simulation.
 
 ## Drives, not scripted responses
 
@@ -81,6 +70,8 @@ src/
   ui/          App.tsx — the observatory (watch & inspect only)
 tests/         regression tests for the emergent behaviour
 ```
+
+Deployment is a static Vite build (`dist/`) — import the repo at **vercel.com/new** (zero config; it auto-detects Vite).
 
 The simulation core is **pure, deterministic TypeScript** (seeded RNG, no wall-clock, no randomness outside the seed) so any run is reproducible and serialisable. The React layer is a **pure observer** — it can inspect beings, settlements, the chronicle, the tech tree and the language, but it can never influence the world.
 
