@@ -36,6 +36,41 @@ function appearanceShade(c: Character, dl: number): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
 }
 
+// Pixel-art buildings, drawn from a few crisp rects. Their type tells the
+// civilisation's story: huts to live in, stores, tilled fields, workshops.
+function drawStructure(ctx: CanvasRenderingContext2D, px: number, py: number, type: string, ppt: number): void {
+  const u = Math.max(1, ppt * 0.14);
+  if (type === "cultivation") {
+    ctx.fillStyle = "#6b5235";
+    ctx.fillRect(px - 4 * u, py - 2 * u, 8 * u, 4 * u);
+    ctx.fillStyle = "#4e6838";
+    for (let i = 0; i < 3; i += 1) ctx.fillRect(px - 4 * u, py - 2 * u + i * 1.5 * u, 8 * u, Math.max(1, u * 0.5));
+    return;
+  }
+  const wall = type === "storage" ? "#9a7d52" : type === "workshop" ? "#6f6a72" : "#7a5a37";
+  const roof = type === "storage" ? "#6e5734" : type === "workshop" ? "#4f4b54" : "#5b4327";
+  ctx.fillStyle = wall;
+  ctx.fillRect(px - 3 * u, py - u, 6 * u, 3 * u);
+  ctx.fillStyle = roof;
+  ctx.beginPath();
+  ctx.moveTo(px - 4 * u, py - u);
+  ctx.lineTo(px, py - 4 * u);
+  ctx.lineTo(px + 4 * u, py - u);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#2e2113";
+  ctx.fillRect(px - u, py + 0.4 * u, 2 * u, 1.6 * u);
+  if (type === "workshop") {
+    ctx.fillStyle = roof;
+    ctx.fillRect(px + 2 * u, py - 3.4 * u, 1.2 * u, 1.6 * u);
+    ctx.fillStyle = "rgba(220,220,225,0.6)";
+    ctx.fillRect(px + 2.1 * u, py - 5 * u, u, u);
+  } else if (type === "storage") {
+    ctx.fillStyle = roof;
+    ctx.fillRect(px - 3 * u, py, 6 * u, Math.max(1, u * 0.4));
+  }
+}
+
 // Draw one being as a pixel-art creature tinted by its genome — body colour,
 // outline, eyes, legs and belly marking all derive from inherited genes, so
 // each lineage looks distinct and evolves over generations.
@@ -329,7 +364,11 @@ export function App(): JSX.Element {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Click a being on the map to follow its life.</Muted>}
+            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+          </Panel>
+
+          <Panel title="Notable Lives">
+            <NotableLives sim={sim} onSelect={setSelectedCharId} />
           </Panel>
 
           <Panel title="Civilisation">
@@ -478,6 +517,15 @@ function MapView({
     cam.current.cy += (targetCy - cam.current.cy) * k;
 
     const ppt = cam.current.scale;
+    // Keep the camera inside the world so we never show empty off-world void:
+    // if the world is wider/taller than the view, clamp the centre to its
+    // bounds; otherwise centre the world.
+    const halfX = cssW / (2 * ppt);
+    const halfY = cssH / (2 * ppt);
+    const wW = sim.world.width;
+    const wH = sim.world.height;
+    cam.current.cx = wW > 2 * halfX ? Math.min(Math.max(cam.current.cx, halfX), wW - halfX) : wW / 2;
+    cam.current.cy = wH > 2 * halfY ? Math.min(Math.max(cam.current.cy, halfY), wH - halfY) : wH / 2;
     const offX = cssW / 2 - cam.current.cx * ppt;
     const offY = cssH / 2 - cam.current.cy * ppt;
     params.current = { offX, offY, ppt };
@@ -508,19 +556,24 @@ function MapView({
       }
     }
 
-    // Structures — little houses.
+    // Climate & season atmosphere: the world reads icy and pale in the deep
+    // cold of its ice age, and warms to a clear, lush light as it thaws.
+    const warmthNow = sim.environment.warmth;
+    const winter = sim.environment.season === "winter";
+    const cold = Math.max(0, Math.min(0.55, (0.64 - warmthNow) * 1.7 + (winter ? 0.12 : 0)));
+    if (cold > 0.01) {
+      ctx.fillStyle = `rgba(214,230,250,${cold.toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+    } else if (sim.environment.season === "summer" && warmthNow > 0.7) {
+      ctx.fillStyle = "rgba(255,226,150,0.06)";
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+
+    // Structures — pixel buildings; clusters of them read as villages.
     for (const s of sim.structures) {
       const px = offX + (s.location.x + 0.5) * ppt;
       const py = offY + (s.location.y + 0.5) * ppt;
-      const r = Math.max(2, ppt * 0.3);
-      ctx.fillStyle = s.type === "shelter" ? "#e7d6a0" : s.type === "cultivation" ? "#9cc06a" : "#b9c8d8";
-      ctx.fillRect(px - r, py - r * 0.4, r * 2, r * 1.2);
-      ctx.beginPath();
-      ctx.moveTo(px - r * 1.1, py - r * 0.4);
-      ctx.lineTo(px, py - r * 1.3);
-      ctx.lineTo(px + r * 1.1, py - r * 0.4);
-      ctx.closePath();
-      ctx.fill();
+      drawStructure(ctx, px, py, s.type, ppt);
     }
 
     // Settlements — rings + names.
@@ -594,6 +647,52 @@ function Swatch({ c, label }: { c: string; label: string }): JSX.Element {
       <span style={{ width: 10, height: 10, background: c, borderRadius: 2, display: "inline-block" }} />
       {label}
     </span>
+  );
+}
+
+// The civilisation's standout individuals — gives the viewer named characters
+// to follow as lineages rise and fall.
+function NotableLives({ sim, onSelect }: { sim: SimulationState; onSelect: (id: string) => void }): JSX.Element {
+  const alive = sim.characters.filter((c) => c.alive);
+  if (!alive.length) return <Muted>No one is left alive.</Muted>;
+  const pick = (f: (c: Character) => number): Character => alive.reduce((a, b) => (f(b) > f(a) ? b : a));
+  const eldest = pick((c) => c.ageDays);
+  const prolific = pick((c) => c.lineage.children.length);
+  const brightest = pick((c) => c.genetics.intelligence);
+
+  const Item = ({ label, c, stat }: { label: string; c: Character; stat: string }): JSX.Element => (
+    <div
+      onClick={() => onSelect(c.id)}
+      style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "3px 0" }}
+      title={`Follow ${c.name}`}
+    >
+      <span
+        style={{
+          width: 16,
+          height: 16,
+          flex: "0 0 auto",
+          borderRadius: c.appearance.form > 0.5 ? "50%" : 3,
+          background: appearanceColor(c),
+          boxShadow: `0 0 6px ${appearanceColor(c)}`,
+        }}
+      />
+      <div style={{ fontSize: 12.5, lineHeight: 1.25 }}>
+        <div>
+          {c.name} <span style={{ color: "#778" }}>{c.sex === "female" ? "♀" : "♂"}</span>
+        </div>
+        <div style={{ color: "#8a8f98", fontSize: 11 }}>
+          {label} · {stat}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <Item label="Eldest" c={eldest} stat={`${Math.floor(eldest.ageDays / 365)} years old`} />
+      <Item label="Most children" c={prolific} stat={`${prolific.lineage.children.length} children`} />
+      <Item label="Brightest" c={brightest} stat={`intellect ${brightest.genetics.intelligence.toFixed(2)}`} />
+    </div>
   );
 }
 
