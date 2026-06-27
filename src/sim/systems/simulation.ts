@@ -223,9 +223,19 @@ export class SimulationEngine {
     env.day += 1;
     env.season = this.seasonForDay(env.day);
     env.warmth = Math.max(0.3, Math.min(0.92, env.warmth + 0.000018 + this.rng.range(-0.0003, 0.0003)));
-    const prev = env.climateEpoch;
-    env.climateEpoch = env.warmth < 0.42 ? "frozen" : env.warmth < 0.6 ? "thawing" : env.warmth < 0.78 ? "temperate" : "warm";
-    if (env.climateEpoch !== prev) this.log("weather", `The long climate turns ${env.climateEpoch}.`);
+    // Hysteresis: only step the climate epoch when warmth moves decisively past
+    // a boundary, so it doesn't flip-flop every tick around a threshold.
+    const order = ["frozen", "thawing", "temperate", "warm"] as const;
+    const bounds = [0.42, 0.6, 0.78];
+    const margin = 0.035;
+    const idx = order.indexOf(env.climateEpoch);
+    let next = env.climateEpoch;
+    if (idx < 3 && env.warmth > bounds[idx] + margin) next = order[idx + 1];
+    else if (idx > 0 && env.warmth < bounds[idx - 1] - margin) next = order[idx - 1];
+    if (next !== env.climateEpoch) {
+      env.climateEpoch = next;
+      this.log("weather", `The long climate turns ${next}.`);
+    }
 
     const seasonalTemp = { spring: 0.5, summer: 0.85, autumn: 0.45, winter: 0.18 }[env.season];
     env.weather.temperature = Math.max(0, Math.min(1, seasonalTemp * (0.6 + 0.6 * env.warmth) + this.rng.range(-0.08, 0.08)));

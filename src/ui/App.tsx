@@ -517,6 +517,19 @@ function MapView({
       }
     }
 
+    // Climate & season atmosphere: the world reads icy and pale in the deep
+    // cold of its ice age, and warms to a clear, lush light as it thaws.
+    const warmthNow = sim.environment.warmth;
+    const winter = sim.environment.season === "winter";
+    const cold = Math.max(0, Math.min(0.55, (0.64 - warmthNow) * 1.7 + (winter ? 0.12 : 0)));
+    if (cold > 0.01) {
+      ctx.fillStyle = `rgba(214,230,250,${cold.toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+    } else if (sim.environment.season === "summer" && warmthNow > 0.7) {
+      ctx.fillStyle = "rgba(255,226,150,0.06)";
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+
     // Structures — little houses.
     for (const s of sim.structures) {
       const px = offX + (s.location.x + 0.5) * ppt;
