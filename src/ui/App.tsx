@@ -478,6 +478,15 @@ function MapView({
     cam.current.cy += (targetCy - cam.current.cy) * k;
 
     const ppt = cam.current.scale;
+    // Keep the camera inside the world so we never show empty off-world void:
+    // if the world is wider/taller than the view, clamp the centre to its
+    // bounds; otherwise centre the world.
+    const halfX = cssW / (2 * ppt);
+    const halfY = cssH / (2 * ppt);
+    const wW = sim.world.width;
+    const wH = sim.world.height;
+    cam.current.cx = wW > 2 * halfX ? Math.min(Math.max(cam.current.cx, halfX), wW - halfX) : wW / 2;
+    cam.current.cy = wH > 2 * halfY ? Math.min(Math.max(cam.current.cy, halfY), wH - halfY) : wH / 2;
     const offX = cssW / 2 - cam.current.cx * ppt;
     const offY = cssH / 2 - cam.current.cy * ppt;
     params.current = { offX, offY, ppt };
