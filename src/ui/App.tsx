@@ -394,11 +394,15 @@ export function App(): JSX.Element {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
           </Panel>
 
           <Panel title="Notable Lives">
             <NotableLives sim={sim} onSelect={setSelectedCharId} />
+          </Panel>
+
+          <Panel title="Faiths">
+            <Faiths sim={sim} />
           </Panel>
 
           <Panel title="Civilisation">
@@ -434,6 +438,23 @@ export function App(): JSX.Element {
             </div>
           </Panel>
 
+          <Panel title="The Epic">
+            <div style={{ maxHeight: 220, overflow: "auto", fontSize: 12 }}>
+              {sim.epic.length === 0 ? (
+                <Muted>The story has not yet begun.</Muted>
+              ) : (
+                sim.epic
+                  .slice()
+                  .reverse()
+                  .map((e, i) => (
+                    <div key={i} style={{ marginBottom: 3, color: epicColor(e.kind) }}>
+                      <span style={{ color: "#667" }}>Yr {e.year}</span> · {e.message}
+                    </div>
+                  ))
+              )}
+            </div>
+          </Panel>
+
           <Panel title="Settlement">
             <select
               value={selectedSettlementId ?? ""}
@@ -465,6 +486,17 @@ export function App(): JSX.Element {
   );
 }
 
+function epicColor(kind: string): string {
+  if (kind === "genesis") return "#e9d27a";
+  if (kind === "epoch") return "#d8c46a";
+  if (kind === "faith") return "#c79be8";
+  if (kind === "war") return "#ef6f6f";
+  if (kind === "settlement") return "#9ec7e8";
+  if (kind === "growth") return "#7fd1a3";
+  if (kind === "plague") return "#b6c84a";
+  return "#aab";
+}
+
 function chronicleColor(cat: string): string {
   if (cat === "birth") return "#7fd1a3";
   if (cat === "death") return "#d98c8c";
@@ -473,6 +505,7 @@ function chronicleColor(cat: string): string {
   if (cat === "settlement") return "#9ec7e8";
   if (cat === "trade") return "#7fd6c0";
   if (cat === "conflict") return "#ef6f6f";
+  if (cat === "belief") return "#c79be8";
   if (cat === "social") return "#ccd";
   return "#99a";
 }
@@ -573,6 +606,14 @@ function MapView({
     const y0 = Math.max(0, Math.floor(-offY / ppt));
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
     const detailed = ppt >= 6;
+    // Territory: each settlement projects influence over nearby land, coloured
+    // by its faith (neutral grey if faithless), so the map shows the domains of
+    // religions and the reach of civilisations.
+    const terr = sim.settlements.map((s) => {
+      const faith = s.beliefId ? sim.beliefs.find((b) => b.id === s.beliefId) : undefined;
+      return { x: s.center.x, y: s.center.y, hue: faith ? faith.hue : -1 };
+    });
+    const TERR_R = 7;
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
         const tile = sim.world.tiles[y][x];
@@ -586,6 +627,22 @@ function MapView({
         } else {
           ctx.fillStyle = BASE_COLOR[tile.terrain] ?? "#5e7a44";
           ctx.fillRect(tx, ty, w, w);
+        }
+        if (terr.length && tile.terrain !== "water") {
+          let bestD = Infinity;
+          let bestHue = -2;
+          for (const t of terr) {
+            const d = Math.abs(t.x - x) + Math.abs(t.y - y);
+            if (d < bestD) {
+              bestD = d;
+              bestHue = t.hue;
+            }
+          }
+          if (bestD <= TERR_R) {
+            const a = 0.26 * (1 - bestD / (TERR_R + 1));
+            ctx.fillStyle = bestHue >= 0 ? `hsla(${Math.round(bestHue)},55%,50%,${a.toFixed(3)})` : `rgba(196,190,205,${(a * 0.5).toFixed(3)})`;
+            ctx.fillRect(tx, ty, w, w);
+          }
         }
       }
     }
@@ -630,6 +687,29 @@ function MapView({
         ctx.font = "11px system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillText(st.name, px, py - ppt * 2.1);
+      }
+      // Plague: a sickly green pall ring marks a settlement gripped by epidemic.
+      if ((st.plague ?? 0) > 0) {
+        ctx.strokeStyle = `rgba(150,180,60,${(0.4 + (st.plague ?? 0) * 0.4).toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, py, ppt * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // Faith shrine: a small diamond in the belief's colour marks a devout village.
+      if (st.beliefId) {
+        const faith = sim.beliefs.find((b) => b.id === st.beliefId);
+        if (faith) {
+          const sz = Math.max(2.5, ppt * 0.5);
+          ctx.fillStyle = `hsl(${faith.hue},70%,${Math.round(45 + st.devotion * 20)}%)`;
+          ctx.beginPath();
+          ctx.moveTo(px, py - ppt * 1.55 - sz);
+          ctx.lineTo(px + sz, py - ppt * 1.55);
+          ctx.lineTo(px, py - ppt * 1.55 + sz);
+          ctx.lineTo(px - sz, py - ppt * 1.55);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
     }
 
@@ -736,6 +816,41 @@ function Swatch({ c, label }: { c: string; label: string }): JSX.Element {
 
 // The civilisation's standout individuals — gives the viewer named characters
 // to follow as lineages rise and fall.
+// The world's emergent religions: who follows them and what they preach.
+function Faiths({ sim }: { sim: SimulationState }): JSX.Element {
+  const followers = new Map<string, number>();
+  for (const s of sim.settlements) if (s.beliefId) followers.set(s.beliefId, (followers.get(s.beliefId) ?? 0) + s.memberIds.length);
+  const living = sim.beliefs.filter((b) => followers.has(b.id));
+  if (!living.length) return <Muted>No faiths yet — the people have not turned to belief.</Muted>;
+  const tenetWord = (b: SimulationState["beliefs"][number]): string => {
+    const t = b.tenets;
+    const traits: string[] = [];
+    if (t.aggression > 0.4) traits.push("militant");
+    else if (t.cooperation > 0.4) traits.push("communal");
+    if (t.innovation > 0.4) traits.push("inquisitive");
+    if (t.fertility > 0.5) traits.push("fecund");
+    if (t.aggression < -0.3) traits.push("pacifist");
+    return traits.length ? traits.join(", ") : "quiet";
+  };
+  return (
+    <div>
+      {living
+        .sort((a, b) => (followers.get(b.id) ?? 0) - (followers.get(a.id) ?? 0))
+        .map((b) => (
+          <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12.5 }}>
+            <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${b.hue},65%,60%)`, boxShadow: `0 0 6px hsl(${b.hue},65%,60%)` }} />
+            <div>
+              <div>
+                <b>{b.name}</b> <span style={{ color: "#778" }}>· {followers.get(b.id)} faithful</span>
+              </div>
+              <div style={{ color: "#8a8f98", fontSize: 11 }}>{tenetWord(b)}</div>
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+}
+
 function NotableLives({ sim, onSelect }: { sim: SimulationState; onSelect: (id: string) => void }): JSX.Element {
   const alive = sim.characters.filter((c) => c.alive);
   if (!alive.length) return <Muted>No one is left alive.</Muted>;
@@ -780,40 +895,79 @@ function NotableLives({ sim, onSelect }: { sim: SimulationState; onSelect: (id: 
   );
 }
 
-function Inhabitant({ c, sim }: { c: Character; sim: SimulationState }): JSX.Element {
+function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; onSelect: (id: string) => void }): JSX.Element {
   const settlement = sim.settlements.find((s) => s.id === c.settlementId);
+  const byId = new Map(sim.characters.map((p) => [p.id, p] as const));
+  const kin = (id: string): Character | undefined => byId.get(id);
+  const partner = c.partnerId ? kin(c.partnerId) : undefined;
+  const parents = c.lineage.parents.map(kin).filter((p): p is Character => !!p);
+  const children = c.lineage.children.map(kin).filter((p): p is Character => !!p);
+
+  const KinChip = ({ p }: { p: Character }): JSX.Element => (
+    <span
+      onClick={() => onSelect(p.id)}
+      title={`Follow ${p.name}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        cursor: "pointer",
+        background: "#1a1d26",
+        border: "1px solid #2c303c",
+        borderRadius: 10,
+        padding: "1px 7px 1px 4px",
+        margin: "2px 4px 0 0",
+        fontSize: 11.5,
+        opacity: p.alive ? 1 : 0.55,
+      }}
+    >
+      <span style={{ width: 9, height: 9, borderRadius: p.appearance.form > 0.5 ? "50%" : 2, background: appearanceColor(p) }} />
+      {p.name}
+      <span style={{ color: "#667" }}>{p.alive ? `${Math.floor(p.ageDays / 365)}` : "†"}</span>
+    </span>
+  );
+
   return (
     <div style={{ fontSize: 13 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span
-          style={{
-            width: 18,
-            height: 18,
-            borderRadius: c.appearance.form > 0.5 ? "50%" : 3,
-            background: appearanceColor(c),
-            display: "inline-block",
-          }}
-        />
+        <span style={{ width: 18, height: 18, borderRadius: c.appearance.form > 0.5 ? "50%" : 3, background: appearanceColor(c), boxShadow: `0 0 6px ${appearanceColor(c)}` }} />
         <b>{c.name}</b>
         <span style={{ color: "#778" }}>
-          {c.sex === "female" ? "♀" : "♂"} · gen {c.lineage.generation}
+          {c.sex === "female" ? "♀" : "♂"} · gen {c.lineage.generation} · {c.alive ? `${Math.floor(c.ageDays / 365)} yrs` : "deceased"}
         </span>
       </div>
-      <Row k="Age / stage" v={`${Math.floor(c.ageDays / 365)} yrs · ${c.lifeStage}`} />
-      <Row k="Health" v={c.health.toFixed(0)} />
+      <Row k="Stage / health" v={`${c.lifeStage} · ${c.health.toFixed(0)} hp`} />
       <Row k="Hunger / thirst" v={`${c.needs.hunger.toFixed(0)} / ${c.needs.thirst.toFixed(0)}`} />
       <Row k="Doing now" v={c.lastAction} />
       <Row k="Learned leaning" v={topActions(c.strategy)} />
       <Row k="Intellect / educ." v={`${c.genetics.intelligence.toFixed(2)} / ${c.education.toFixed(2)}`} />
-      <Row k="Children" v={String(c.lineage.children.length)} />
       <Row k="Settlement" v={settlement?.name ?? "—"} />
       <div style={{ color: "#8a8f98", marginTop: 4, fontStyle: "italic" }}>{c.lastDecisionReason}</div>
+
+      <div style={{ borderTop: "1px solid #23252c", marginTop: 8, paddingTop: 6 }}>
+        <div style={{ fontSize: 11, color: "#8a8f98" }}>Lineage — tap to follow a relative</div>
+        {partner ? (
+          <div style={{ marginTop: 3 }}>
+            <span style={{ color: "#8a8f98", fontSize: 11 }}>partner</span> <KinChip p={partner} />
+          </div>
+        ) : null}
+        {parents.length ? (
+          <div style={{ marginTop: 3 }}>
+            <span style={{ color: "#8a8f98", fontSize: 11 }}>parents</span> {parents.map((p) => <KinChip key={p.id} p={p} />)}
+          </div>
+        ) : null}
+        <div style={{ marginTop: 3 }}>
+          <span style={{ color: "#8a8f98", fontSize: 11 }}>children ({children.length})</span>{" "}
+          {children.length ? children.slice(0, 16).map((p) => <KinChip key={p.id} p={p} />) : <Muted>none</Muted>}
+        </div>
+      </div>
     </div>
   );
 }
 
 function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JSX.Element {
   const leader = sim.characters.find((c) => c.id === s.leaderId);
+  const faith = sim.beliefs.find((b) => b.id === s.beliefId);
   return (
     <div style={{ fontSize: 13 }}>
       <Row k="People" v={String(s.memberIds.length)} />
@@ -821,6 +975,8 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Structures" v={String(s.structures.length)} />
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
+      <Row k="Faith" v={faith ? `${faith.name} (devotion ${s.devotion.toFixed(2)})` : "none"} />
+      {(s.plague ?? 0) > 0 ? <Row k="Health" v={`⚠ plague (${(s.plague ?? 0).toFixed(2)})`} /> : null}
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
       <Row k="Aggression" v={s.culture.aggression.toFixed(2)} />
       <Row k="Trade openness" v={s.culture.tradePreference.toFixed(2)} />

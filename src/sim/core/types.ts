@@ -23,7 +23,8 @@ export type EventCategory =
   | "discovery"
   | "epoch"
   | "trade"
-  | "conflict";
+  | "conflict"
+  | "belief";
 
 export interface Vec2 {
   x: number;
@@ -156,11 +157,31 @@ export interface Settlement {
   knowledge: number;
   foundedTick: number;
   populationPeak: number;
+  beliefId?: ID;
+  devotion: number;
+  plague?: number; // active epidemic intensity (0/undefined = healthy)
   culture: {
     cooperation: number;
     tradePreference: number;
     aggression: number;
     innovation: number;
+  };
+}
+
+// An emergent faith. Founded by a settlement, named in the people's own tongue,
+// with tenets that shape how its followers live. It spreads along trade routes,
+// binds co-religionists in peace, and sets rival faiths at war.
+export interface Belief {
+  id: ID;
+  name: string;
+  hue: number;
+  foundedTick: number;
+  founderId?: ID;
+  tenets: {
+    cooperation: number;
+    aggression: number;
+    innovation: number;
+    fertility: number;
   };
 }
 
@@ -265,6 +286,15 @@ export interface HistoryEvent {
   actorIds?: ID[];
 }
 
+// A milestone in the world's epic — append-only and preserved from genesis, so
+// the whole arc of history can be read as a story.
+export interface Milestone {
+  tick: number;
+  year: number;
+  kind: "genesis" | "settlement" | "epoch" | "faith" | "war" | "growth" | "plague";
+  message: string;
+}
+
 export interface MetricsSnapshot {
   tick: number;
   year: number;
@@ -302,7 +332,10 @@ export interface SimulationState {
   households: Household[];
   settlements: Settlement[];
   nextSettlementNum: number;
+  beliefs: Belief[];
   links: WorldLink[];
+  epic: Milestone[];
+  nextPopMilestone: number;
   history: HistoryEvent[];
   metrics: MetricsSnapshot[];
 }
