@@ -18,6 +18,7 @@ import {
   HistoryEvent,
   LifeStage,
   MetricsSnapshot,
+  Milestone,
   ResourceType,
   Settlement,
   SimulationState,
@@ -69,6 +70,10 @@ export class SimulationEngine {
       this.state = existingState;
       if (!this.state.links) this.state.links = []; // back-compat with older saves
       if (!this.state.beliefs) this.state.beliefs = [];
+      if (!this.state.epic) {
+        this.state.epic = [];
+        this.state.nextPopMilestone = 50;
+      }
       this.rng = new Rng(existingState.rngSeed);
       this.reindex();
       this.aggregateTech();
@@ -135,6 +140,8 @@ export class SimulationEngine {
       nextSettlementNum: 1,
       beliefs: [],
       links: [],
+      epic: [],
+      nextPopMilestone: 50,
       history: [],
       metrics: [],
     };
@@ -152,6 +159,7 @@ export class SimulationEngine {
       `Genesis: ${founders[0].name} and ${founders[1].name} awaken in a frozen world, the first of their kind.`,
       founders.map((c) => c.id),
     );
+    this.milestone("genesis", `In the frozen dawn, ${founders[0].name} and ${founders[1].name} awaken — the first of their kind.`);
   }
 
   // ---------------------------------------------------------------- indexing
@@ -214,6 +222,13 @@ export class SimulationEngine {
     const event: HistoryEvent = { id: makeId("evt"), tick: this.state.tick, category, message, actorIds };
     this.state.history.push(event);
     if (this.state.history.length > 5000) this.state.history.shift();
+  }
+
+  // Record a turning point in the world's epic. Append-only and preserved from
+  // genesis (unlike the high-churn chronicle), so the whole arc reads as a story.
+  private milestone(kind: Milestone["kind"], message: string): void {
+    this.state.epic.push({ tick: this.state.tick, year: Math.floor(this.state.environment.day / YEAR), kind, message });
+    if (this.state.epic.length > 600) this.state.epic.shift();
   }
 
   // ------------------------------------------------------------- environment
@@ -923,6 +938,9 @@ export class SimulationEngine {
       "conflict",
       `${agg.name} ${verb} ${vic.name}, seizing ${loot.toFixed(0)} ${food}${killed ? ` and leaving ${killed} dead` : ""}.`,
     );
+    if (holy && !this.state.epic.some((e) => e.kind === "war")) {
+      this.milestone("war", `The first holy war erupts: ${agg.name} falls upon ${vic.name}.`);
+    }
   }
 
   // -------------------------------------------------------------- beliefs
@@ -950,6 +968,7 @@ export class SimulationEngine {
       `${founder ? founder.name : "The elders"} of ${s.name} founded the faith of ${belief.name}.`,
       founder ? [founder.id] : undefined,
     );
+    this.milestone("faith", `${founder ? founder.name : "The elders"} of ${s.name} founded the faith of ${belief.name}.`);
   }
 
   // Faiths are born from charismatic minds, deepen with devotion, and reshape
@@ -1035,6 +1054,9 @@ export class SimulationEngine {
       for (const h of group) h.settlementId = settlement.id;
       this.state.settlements.push(settlement);
       this.log("settlement", `A settlement, ${settlement.name}, took root.`);
+      if (!this.state.epic.some((e) => e.kind === "settlement")) {
+        this.milestone("settlement", `${settlement.name} is founded — the people's first settlement.`);
+      }
     }
 
     const survivors: Settlement[] = [];
@@ -1182,6 +1204,7 @@ export class SimulationEngine {
         this.state.epochs.push(epoch);
         this.state.nextEpochThreshold = Math.ceil(this.state.nextEpochThreshold * 1.9) + 2;
         this.log("epoch", `The people name a new age: "${epoch.name}".`);
+        this.milestone("epoch", `The age of ${epoch.name} begins.`);
       }
     }
 
@@ -1193,6 +1216,10 @@ export class SimulationEngine {
   private pushMetrics(): void {
     const alive = this.state.characters.filter((c) => c.alive);
     this.state.peakPopulation = Math.max(this.state.peakPopulation, alive.length);
+    if (alive.length >= this.state.nextPopMilestone) {
+      this.milestone("growth", `The people grow to ${this.state.nextPopMilestone} souls.`);
+      this.state.nextPopMilestone = this.state.nextPopMilestone < 200 ? this.state.nextPopMilestone + 50 : Math.round(this.state.nextPopMilestone * 1.5);
+    }
     const foodTotal = this.state.world.tiles.flat().reduce((sum, t) => sum + (t.resources.food ?? 0), 0);
     const avgAgeYears = alive.length ? alive.reduce((sum, c) => sum + c.ageDays / YEAR, 0) / alive.length : 0;
     const maxGeneration = alive.reduce((m, c) => Math.max(m, c.lineage.generation), 0);

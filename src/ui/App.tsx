@@ -438,6 +438,23 @@ export function App(): JSX.Element {
             </div>
           </Panel>
 
+          <Panel title="The Epic">
+            <div style={{ maxHeight: 220, overflow: "auto", fontSize: 12 }}>
+              {sim.epic.length === 0 ? (
+                <Muted>The story has not yet begun.</Muted>
+              ) : (
+                sim.epic
+                  .slice()
+                  .reverse()
+                  .map((e, i) => (
+                    <div key={i} style={{ marginBottom: 3, color: epicColor(e.kind) }}>
+                      <span style={{ color: "#667" }}>Yr {e.year}</span> · {e.message}
+                    </div>
+                  ))
+              )}
+            </div>
+          </Panel>
+
           <Panel title="Settlement">
             <select
               value={selectedSettlementId ?? ""}
@@ -467,6 +484,16 @@ export function App(): JSX.Element {
       </div>
     </div>
   );
+}
+
+function epicColor(kind: string): string {
+  if (kind === "genesis") return "#e9d27a";
+  if (kind === "epoch") return "#d8c46a";
+  if (kind === "faith") return "#c79be8";
+  if (kind === "war") return "#ef6f6f";
+  if (kind === "settlement") return "#9ec7e8";
+  if (kind === "growth") return "#7fd1a3";
+  return "#aab";
 }
 
 function chronicleColor(cat: string): string {

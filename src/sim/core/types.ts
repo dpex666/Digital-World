@@ -285,6 +285,15 @@ export interface HistoryEvent {
   actorIds?: ID[];
 }
 
+// A milestone in the world's epic — append-only and preserved from genesis, so
+// the whole arc of history can be read as a story.
+export interface Milestone {
+  tick: number;
+  year: number;
+  kind: "genesis" | "settlement" | "epoch" | "faith" | "war" | "growth";
+  message: string;
+}
+
 export interface MetricsSnapshot {
   tick: number;
   year: number;
@@ -324,6 +333,8 @@ export interface SimulationState {
   nextSettlementNum: number;
   beliefs: Belief[];
   links: WorldLink[];
+  epic: Milestone[];
+  nextPopMilestone: number;
   history: HistoryEvent[];
   metrics: MetricsSnapshot[];
 }
