@@ -794,6 +794,25 @@ function MapView({
       drawStructure(ctx, px, py, s.type, ppt);
     }
 
+    // Trade roads: persistent paths worn between settlements that trade often.
+    // Drawn beneath the settlements so towns sit atop their road network. Their
+    // brightness and width grow with the road's reinforced strength.
+    if (sim.routes && sim.routes.length) {
+      const centerOf = new Map(sim.settlements.map((s) => [s.id, s.center] as const));
+      for (const route of sim.routes) {
+        const ca = centerOf.get(route.a);
+        const cb = centerOf.get(route.b);
+        if (!ca || !cb) continue;
+        const op = Math.min(0.5, 0.12 + route.strength * 0.5);
+        ctx.strokeStyle = `rgba(214,196,140,${op.toFixed(3)})`;
+        ctx.lineWidth = 0.8 + route.strength * 2.6;
+        ctx.beginPath();
+        ctx.moveTo(offX + (ca.x + 0.5) * ppt, offY + (ca.y + 0.5) * ppt);
+        ctx.lineTo(offX + (cb.x + 0.5) * ppt, offY + (cb.y + 0.5) * ppt);
+        ctx.stroke();
+      }
+    }
+
     // Settlements — rings + names. Capitals (a realm's largest settlement) get a star.
     const capitals = new Set(sim.realms.map((r) => r.capitalId).filter((x): x is string => !!x));
     for (const st of sim.settlements) {

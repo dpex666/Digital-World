@@ -25,6 +25,7 @@ import {
   SimulationState,
   TechEffects,
   Technique,
+  TradeRoute,
   Vec2,
 } from "../core/types";
 import { makeId } from "../util/id";
@@ -75,6 +76,7 @@ export class SimulationEngine {
     if (existingState) {
       this.state = existingState;
       if (!this.state.links) this.state.links = []; // back-compat with older saves
+      if (!this.state.routes) this.state.routes = [];
       if (!this.state.beliefs) this.state.beliefs = [];
       if (!this.state.epic) {
         this.state.epic = [];
@@ -152,6 +154,7 @@ export class SimulationEngine {
       realms: [],
       nextRealmNum: 1,
       links: [],
+      routes: [],
       epic: [],
       nextPopMilestone: 50,
       history: [],
@@ -1035,6 +1038,32 @@ export class SimulationEngine {
     }
   }
 
+  // Reinforce the road between two trading settlements; commerce that recurs
+  // wears a stronger path. Roads are keyed by the unordered settlement pair.
+  private reinforceRoute(s1: string, s2: string): void {
+    const [a, b] = s1 < s2 ? [s1, s2] : [s2, s1];
+    let route = this.state.routes.find((r) => r.a === a && r.b === b);
+    if (!route) {
+      route = { a, b, strength: 0, lastTick: this.state.tick };
+      this.state.routes.push(route);
+    }
+    route.strength = Math.min(1, route.strength + 0.06);
+    route.lastTick = this.state.tick;
+  }
+
+  // Roads fade when commerce lapses; once faint or once a settlement is gone,
+  // the road is forgotten. Emergent infrastructure, sustained only by use.
+  private updateRoutes(): void {
+    const live = new Set(this.state.settlements.map((s) => s.id));
+    const kept: TradeRoute[] = [];
+    for (const r of this.state.routes) {
+      if (!live.has(r.a) || !live.has(r.b)) continue;
+      r.strength -= 0.0009;
+      if (r.strength > 0.04) kept.push(r);
+    }
+    this.state.routes = kept;
+  }
+
   private tradeBetween(a: Settlement, b: Settlement, food: string): void {
     const aPer = this.settlementFoodPer(a);
     const bPer = this.settlementFoodPer(b);
@@ -1046,6 +1075,7 @@ export class SimulationEngine {
     poor.knowledge = Math.min(8, poor.knowledge + 0.03);
     rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
     poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
+    this.reinforceRoute(rich.id, poor.id);
     this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
     // Conversion flows from the devout and prospering to the doubting: the
     // poorer partner's openness is the inverse of its own (fortune-driven)
@@ -1714,6 +1744,7 @@ export class SimulationEngine {
       this.updateRealms();
       this.updatePlagues();
       this.interSettlement();
+      this.updateRoutes();
       if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
       this.advanceResearch();
       this.pushMetrics();

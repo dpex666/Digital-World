@@ -301,6 +301,16 @@ export interface WorldLink {
   tick: number;
 }
 
+// A persistent trade road between two settlements. Its strength is reinforced
+// every time a caravan travels it and decays when commerce lapses, so the road
+// network is emergent infrastructure — it forms where trade actually flows.
+export interface TradeRoute {
+  a: ID;
+  b: ID;
+  strength: number;
+  lastTick: number;
+}
+
 export interface HistoryEvent {
   id: ID;
   tick: number;
@@ -359,6 +369,7 @@ export interface SimulationState {
   realms: Realm[];
   nextRealmNum: number;
   links: WorldLink[];
+  routes: TradeRoute[];
   epic: Milestone[];
   nextPopMilestone: number;
   history: HistoryEvent[];
