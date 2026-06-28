@@ -1,3 +1,20 @@
+:root {
+  --bg: #0a0b10;
+  --bg-2: #0d0f16;
+  --panel: #12141c;
+  --panel-2: #171a24;
+  --border: #232838;
+  --border-soft: #1b1f2b;
+  --text: #e8eaf0;
+  --muted: #8b90a3;
+  --faint: #5c6270;
+  --gold: #e0c976;
+  --accent: #7fb0e8;
+  --good: #7fd1a3;
+  --bad: #ef7a7a;
+  --violet: #c79be8;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -6,44 +23,272 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: #0b0c10;
+  background: radial-gradient(1200px 600px at 70% -10%, #14161f 0%, var(--bg) 55%);
+  color: var(--text);
   overflow-x: hidden;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Observatory layout: world on the left, panels on the right; stacks on
-   narrow screens. A CSS media query is evaluated by the browser against the
-   real viewport, so it can't race or get a stale width like a JS check. */
+.dw-app {
+  padding: 16px;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+/* Header */
+.dw-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dw-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  background: linear-gradient(90deg, #fff 0%, #cdd3e6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.dw-sub {
+  color: var(--muted);
+  font-size: 12.5px;
+  flex: 1 1 240px;
+}
+
+/* Stat chips */
+.statbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.statchip {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.statchip .k {
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.statchip .v {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* Controls */
+.controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.controls .label {
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: 6px;
+}
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 11px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+button:hover {
+  background: #1f2330;
+  border-color: #2e3344;
+}
+button.on {
+  background: #25304a;
+  border-color: #3a4a6e;
+  color: #fff;
+  font-weight: 600;
+}
+button.primary {
+  background: linear-gradient(180deg, #2a3650, #222c43);
+  border-color: #3a4a6e;
+}
+select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  width: 100%;
+}
+
+/* Layout */
 .dw-layout {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
   gap: 14px;
   align-items: start;
 }
-
-@media (max-width: 900px) {
+@media (max-width: 920px) {
   .dw-layout {
     grid-template-columns: 1fr;
   }
 }
 
-button {
-  background: #1a1d26;
-  color: #e8e8ea;
-  border: 1px solid #2c303c;
-  border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 13px;
+/* Panels */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 13px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+}
+.panel > h3 {
+  margin: 0 0 9px;
+  font-size: 11px;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* Map frame */
+.map-frame {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #06070a;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.map-frame canvas {
+  display: block;
+  width: 100%;
+}
+.map-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
+}
+
+/* Metrics */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+.metric .k {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.metric .v {
+  font-size: 17px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  margin-bottom: 12px;
+}
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 7px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-radius: 7px;
   cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.active {
+  background: var(--panel-2);
+  color: #fff;
+  box-shadow: 0 0 0 1px var(--border);
 }
 
-button:hover {
-  background: #232733;
+/* Rows / chips */
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+.row .k {
+  color: var(--muted);
+}
+.kinchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 1px 8px 1px 4px;
+  margin: 3px 4px 0 0;
+  font-size: 11.5px;
+  transition: border-color 0.12s;
+}
+.kinchip:hover {
+  border-color: #3a4060;
 }
 
-select {
-  background: #1a1d26;
-  color: #e8e8ea;
-  border: 1px solid #2c303c;
-  border-radius: 6px;
-  padding: 5px 8px;
+/* Scrollers */
+.scroll {
+  overflow: auto;
+}
+.scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: #262b3a;
+  border-radius: 8px;
+}
+.scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.muted {
+  color: var(--faint);
+  font-size: 12px;
 }

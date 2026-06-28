@@ -168,6 +168,19 @@ export interface Settlement {
   };
 }
 
+// A people / nation: settlements bound by a shared faith and proximity, with
+// their own name and colour. Realms form, grow, and fragment as faiths spread
+// and villages rise and fall.
+export interface Realm {
+  id: ID;
+  name: string;
+  hue: number;
+  beliefId?: ID;
+  settlementIds: ID[];
+  foundedTick: number;
+  populationPeak: number;
+}
+
 // An emergent faith. Founded by a settlement, named in the people's own tongue,
 // with tenets that shape how its followers live. It spreads along trade routes,
 // binds co-religionists in peace, and sets rival faiths at war.
@@ -333,6 +346,8 @@ export interface SimulationState {
   settlements: Settlement[];
   nextSettlementNum: number;
   beliefs: Belief[];
+  realms: Realm[];
+  nextRealmNum: number;
   links: WorldLink[];
   epic: Milestone[];
   nextPopMilestone: number;

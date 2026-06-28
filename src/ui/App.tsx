@@ -285,6 +285,7 @@ export function App(): JSX.Element {
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
   const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
   const [zoom, setZoom] = useState(1);
+  const [tab, setTab] = useState<"world" | "lives" | "story">("world");
   const saveCounter = useRef(0);
   const latest = useRef(sim);
   latest.current = sim;
@@ -325,18 +326,16 @@ export function App(): JSX.Element {
   const lexicon = Object.entries(sim.language.lexicon);
 
   return (
-    <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 14, color: "#e8e8ea", background: "#0b0c10", minHeight: "100vh" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>Digital World</h1>
-        <span style={{ color: "#8a8f98", fontSize: 13 }}>
-          An autonomous civilisation that begins as two and grows, learns, and invents on its own. You are watching — not playing.
-        </span>
+    <div className="dw-app">
+      <div className="dw-header">
+        <h1 className="dw-title">Digital World</h1>
+        <span className="dw-sub">An autonomous civilisation that begins as two and grows, learns, invents, believes, and wars — on its own. You are watching, not playing.</span>
       </div>
 
       {caughtUp > 0 ? (
         <div
           onClick={() => setCaughtUp(0)}
-          style={{ marginTop: 8, padding: "6px 10px", background: "#1a2230", border: "1px solid #2c3a52", borderRadius: 6, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
+          style={{ marginTop: 10, padding: "7px 11px", background: "#15202f", border: "1px solid #2c3a52", borderRadius: 9, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
           title="dismiss"
         >
           ⏳ The world kept living while you were away — it advanced <b>{caughtUp}</b> {caughtUp === 1 ? "day" : "days"}
@@ -344,144 +343,205 @@ export function App(): JSX.Element {
         </div>
       ) : null}
 
-      <p style={{ color: "#aab", fontSize: 13, marginTop: 8 }}>
-        Year <b>{m?.year ?? 0}</b> · Tick {sim.tick} · {sim.environment.season} · Climate <b>{sim.environment.climateEpoch}</b> (warmth{" "}
-        {sim.environment.warmth.toFixed(2)}) · Age: <b style={{ color: "#d8c46a" }}>{sim.epoch.name}</b> (epoch {sim.epoch.index}) · Population{" "}
-        <b>{m?.population ?? 0}</b> · Generation {m?.maxGeneration ?? 0}
-      </p>
+      <div className="statbar">
+        <StatChip k="Year" v={String(m?.year ?? 0)} />
+        <StatChip k="Age" v={sim.epoch.name} accent />
+        <StatChip k="Climate" v={`${sim.environment.climateEpoch} ${sim.environment.warmth.toFixed(2)}`} />
+        <StatChip k="Season" v={sim.environment.season} />
+        <StatChip k="Population" v={String(m?.population ?? 0)} />
+        <StatChip k="Generation" v={String(m?.maxGeneration ?? 0)} />
+        <StatChip k="Realms" v={String(sim.realms.length)} />
+        <StatChip k="Faiths" v={String(sim.beliefs.filter((b) => sim.settlements.some((s) => s.beliefId === b.id)).length)} />
+      </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
-        <span style={{ color: "#777", fontSize: 12 }}>speed</span>
+      <div className="controls">
+        <button className="primary" onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
+        <span className="label">speed</span>
         {SPEEDS.map((s) => (
-          <button key={s} onClick={() => setSpeed(s)} style={{ fontWeight: speed === s ? 700 : 400, opacity: speed === s ? 1 : 0.6 }}>
+          <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>
             {s}×
           </button>
         ))}
-        <span style={{ color: "#777", fontSize: 12, marginLeft: 6 }}>zoom</span>
+        <span className="label">zoom</span>
         <button onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.5).toFixed(1)))}>−</button>
         <button onClick={() => setZoom((z) => Math.min(6, +(z + 0.5).toFixed(1)))}>+</button>
-        <span style={{ color: "#555", fontSize: 12 }}>{zoom.toFixed(1)}×</span>
-        <span style={{ color: "#555", fontSize: 12, marginLeft: 6 }}>the view follows the living — they glow; click one to follow its life</span>
+        <span style={{ color: "var(--faint)", fontSize: 12 }}>{zoom.toFixed(1)}×</span>
       </div>
 
       <div className="dw-layout">
         <div style={{ minWidth: 0 }}>
-          <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} speed={speed} />
+          <div className="map-frame">
+            <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} speed={speed} />
+          </div>
 
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "var(--muted)" }}>
             <Swatch c="rgb(46,92,134)" label="water" />
             <Swatch c="rgb(120,116,126)" label="mountain" />
             <Swatch c="rgb(196,176,116)" label="desert" />
             <Swatch c="rgb(52,102,60)" label="forest" />
             <Swatch c="rgb(98,126,78)" label="plains" />
-            <span style={{ marginLeft: 6 }}>beings are little creatures coloured by their evolving genome · ⌂ structures · ◯ settlements</span>
+            <span style={{ marginLeft: 4, color: "var(--faint)" }}>◇ faith shrine · coloured land = realm territory · the view follows the living</span>
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          <div className="metric-grid">
             <Metric label="Population" value={m?.population ?? 0} />
-            <Metric label="Births (yr-tick)" value={m?.births ?? 0} />
-            <Metric label="Deaths (yr-tick)" value={m?.deaths ?? 0} />
-            <Metric label="Avg age (yrs)" value={m?.avgAgeYears ?? 0} />
+            <Metric label="Births / tick" value={m?.births ?? 0} />
+            <Metric label="Deaths / tick" value={m?.deaths ?? 0} />
+            <Metric label="Avg age" value={m?.avgAgeYears ?? 0} />
             <Metric label="Households" value={m?.households ?? 0} />
             <Metric label="Settlements" value={m?.settlements ?? 0} />
             <Metric label="Inventions" value={m?.techCount ?? 0} />
             <Metric label="Avg intellect" value={m?.avgIntelligence ?? 0} />
           </div>
 
-          <PopGraph sim={sim} />
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3>Population over time</h3>
+            <PopGraph sim={sim} />
+          </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
-          </Panel>
+        <div style={{ minWidth: 0 }}>
+          <div className="tabs">
+            <div className={`tab ${tab === "world" ? "active" : ""}`} onClick={() => setTab("world")}>World</div>
+            <div className={`tab ${tab === "lives" ? "active" : ""}`} onClick={() => setTab("lives")}>Lives</div>
+            <div className={`tab ${tab === "story" ? "active" : ""}`} onClick={() => setTab("story")}>Story</div>
+          </div>
 
-          <Panel title="Notable Lives">
-            <NotableLives sim={sim} onSelect={setSelectedCharId} />
-          </Panel>
+          {tab === "lives" ? (
+            <>
+              <Panel title="Inhabitant">
+                {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+              </Panel>
+              <Panel title="Notable Lives">
+                <NotableLives sim={sim} onSelect={setSelectedCharId} />
+              </Panel>
+            </>
+          ) : null}
 
-          <Panel title="Faiths">
-            <Faiths sim={sim} />
-          </Panel>
-
-          <Panel title="Civilisation">
-            <Row k="Age (epoch)" v={`${sim.epoch.name} · #${sim.epoch.index}`} />
-            <Row k="Knowledge" v={sim.knowledge.toFixed(0)} />
-            <Row k="Inventions" v={String(sim.techniques.length)} />
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 6 }}>Their inventions (named in their own tongue):</div>
-            <div style={{ fontSize: 12, maxHeight: 90, overflow: "auto" }}>
-              {sim.techniques.length === 0 ? (
-                <Muted>No inventions yet — they are still learning to survive.</Muted>
-              ) : (
-                sim.techniques
-                  .slice(-8)
-                  .reverse()
-                  .map((t) => (
-                    <div key={t.id}>
-                      <b style={{ color: "#cdb6f0" }}>{t.name}</b> <span style={{ color: "#667" }}>· tier {t.tier}</span>
-                    </div>
-                  ))
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their world's elements:</div>
-            <div style={{ fontSize: 12 }}>
-              {(Object.values(sim.elements)).map((el) => (
-                <span key={el.name} style={{ marginRight: 8, color: `hsl(${el.hue},60%,70%)` }}>
-                  {el.name} <span style={{ color: "#667" }}>({el.role})</span>
-                </span>
-              ))}
-            </div>
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their language ({lexicon.length} words coined):</div>
-            <div style={{ fontSize: 12, color: "#bcd" }}>
-              {lexicon.slice(-10).map(([, w]) => w).join(" · ") || <Muted>—</Muted>}
-            </div>
-          </Panel>
-
-          <Panel title="The Epic">
-            <div style={{ maxHeight: 220, overflow: "auto", fontSize: 12 }}>
-              {sim.epic.length === 0 ? (
-                <Muted>The story has not yet begun.</Muted>
-              ) : (
-                sim.epic
-                  .slice()
-                  .reverse()
-                  .map((e, i) => (
-                    <div key={i} style={{ marginBottom: 3, color: epicColor(e.kind) }}>
-                      <span style={{ color: "#667" }}>Yr {e.year}</span> · {e.message}
-                    </div>
-                  ))
-              )}
-            </div>
-          </Panel>
-
-          <Panel title="Settlement">
-            <select
-              value={selectedSettlementId ?? ""}
-              onChange={(e) => setSelectedSettlementId(e.target.value || null)}
-              style={{ width: "100%", marginBottom: 6 }}
-            >
-              <option value="">— select a settlement —</option>
-              {sim.settlements.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.memberIds.length})
-                </option>
-              ))}
-            </select>
-            {selectedSettlement ? <SettlementView s={selectedSettlement} sim={sim} /> : <Muted>None selected.</Muted>}
-          </Panel>
-
-          <Panel title="Chronicle">
-            <div style={{ maxHeight: 260, overflow: "auto", fontSize: 12 }}>
-              {recent.map((e) => (
-                <div key={e.id} style={{ color: chronicleColor(e.category), marginBottom: 2 }}>
-                  <span style={{ color: "#556" }}>[{e.tick}]</span> {e.message}
+          {tab === "world" ? (
+            <>
+              <Panel title="Realms & Peoples">
+                <Realms sim={sim} onSelectSettlement={setSelectedSettlementId} />
+              </Panel>
+              <Panel title="Faiths">
+                <Faiths sim={sim} />
+              </Panel>
+              <Panel title="Civilisation">
+                <Row k="Age (epoch)" v={`${sim.epoch.name} · #${sim.epoch.index}`} />
+                <Row k="Knowledge" v={sim.knowledge.toFixed(0)} />
+                <Row k="Inventions" v={String(sim.techniques.length)} />
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>Inventions (in their own tongue)</div>
+                <div className="scroll" style={{ fontSize: 12, maxHeight: 86 }}>
+                  {sim.techniques.length === 0 ? (
+                    <Muted>No inventions yet — they are still learning to survive.</Muted>
+                  ) : (
+                    sim.techniques.slice(-8).reverse().map((t) => (
+                      <div key={t.id}>
+                        <b style={{ color: "var(--violet)" }}>{t.name}</b> <span style={{ color: "var(--faint)" }}>· tier {t.tier}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))}
-            </div>
-          </Panel>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>World elements</div>
+                <div style={{ fontSize: 12 }}>
+                  {Object.values(sim.elements).map((el) => (
+                    <span key={el.name} style={{ marginRight: 8, color: `hsl(${el.hue},60%,70%)` }}>
+                      {el.name} <span style={{ color: "var(--faint)" }}>({el.role})</span>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>Language ({lexicon.length} words)</div>
+                <div style={{ fontSize: 12, color: "#bcd" }}>{lexicon.slice(-10).map(([, w]) => w).join(" · ") || <Muted>—</Muted>}</div>
+              </Panel>
+              <Panel title="Settlement Inspector">
+                <select value={selectedSettlementId ?? ""} onChange={(e) => setSelectedSettlementId(e.target.value || null)} style={{ marginBottom: 8 }}>
+                  <option value="">— select a settlement —</option>
+                  {sim.settlements.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.memberIds.length})
+                    </option>
+                  ))}
+                </select>
+                {selectedSettlement ? <SettlementView s={selectedSettlement} sim={sim} /> : <Muted>None selected.</Muted>}
+              </Panel>
+            </>
+          ) : null}
+
+          {tab === "story" ? (
+            <>
+              <Panel title="The Epic">
+                <div className="scroll" style={{ maxHeight: 280, fontSize: 12 }}>
+                  {sim.epic.length === 0 ? (
+                    <Muted>The story has not yet begun.</Muted>
+                  ) : (
+                    sim.epic.slice().reverse().map((e, i) => (
+                      <div key={i} style={{ marginBottom: 4, color: epicColor(e.kind) }}>
+                        <span style={{ color: "var(--faint)" }}>Yr {e.year}</span> · {e.message}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Panel>
+              <Panel title="Chronicle">
+                <div className="scroll" style={{ maxHeight: 320, fontSize: 12 }}>
+                  {recent.map((e) => (
+                    <div key={e.id} style={{ color: chronicleColor(e.category), marginBottom: 2 }}>
+                      <span style={{ color: "var(--faint)" }}>[{e.tick}]</span> {e.message}
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            </>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatChip({ k, v, accent }: { k: string; v: string; accent?: boolean }): JSX.Element {
+  return (
+    <div className="statchip">
+      <span className="k">{k}</span>
+      <span className="v" style={accent ? { color: "var(--gold)" } : undefined}>
+        {v}
+      </span>
+    </div>
+  );
+}
+
+// The world's peoples / nations and the settlements that make them up.
+function Realms({ sim, onSelectSettlement }: { sim: SimulationState; onSelectSettlement: (id: string) => void }): JSX.Element {
+  if (!sim.realms.length) return <Muted>No realms yet.</Muted>;
+  const pop = (r: SimulationState["realms"][number]): number =>
+    r.settlementIds.reduce((t, id) => t + (sim.settlements.find((s) => s.id === id)?.memberIds.length ?? 0), 0);
+  const faithName = (id?: string): string => sim.beliefs.find((b) => b.id === id)?.name ?? "no faith";
+  return (
+    <div>
+      {sim.realms
+        .slice()
+        .sort((a, b) => pop(b) - pop(a))
+        .map((r) => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--border-soft)" }}>
+            <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${r.hue},55%,55%)`, boxShadow: `0 0 6px hsl(${r.hue},55%,55%)` }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5 }}>
+                <b>{r.name}</b> <span style={{ color: "var(--faint)" }}>· {pop(r)} people · {r.settlementIds.length === 1 ? "city-state" : `${r.settlementIds.length} settlements`}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {faithName(r.beliefId)} ·{" "}
+                {r.settlementIds
+                  .map((id) => sim.settlements.find((s) => s.id === id))
+                  .filter(Boolean)
+                  .map((s) => (
+                    <span key={s!.id} onClick={() => onSelectSettlement(s!.id)} style={{ cursor: "pointer", color: "var(--accent)", marginRight: 5 }}>
+                      {s!.name}
+                    </span>
+                  ))}
+              </div>
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
@@ -607,12 +667,11 @@ function MapView({
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
     const detailed = ppt >= 6;
     // Territory: each settlement projects influence over nearby land, coloured
-    // by its faith (neutral grey if faithless), so the map shows the domains of
-    // religions and the reach of civilisations.
-    const terr = sim.settlements.map((s) => {
-      const faith = s.beliefId ? sim.beliefs.find((b) => b.id === s.beliefId) : undefined;
-      return { x: s.center.x, y: s.center.y, hue: faith ? faith.hue : -1 };
-    });
+    // by its realm (nation), so the map shows the reach of peoples — distinct
+    // realms read as distinct colours even when they share a faith.
+    const realmHue = new Map<string, number>();
+    for (const rl of sim.realms) for (const sid of rl.settlementIds) realmHue.set(sid, rl.hue);
+    const terr = sim.settlements.map((s) => ({ x: s.center.x, y: s.center.y, hue: realmHue.get(s.id) ?? -1 }));
     const TERR_R = 7;
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
@@ -713,6 +772,21 @@ function MapView({
       }
     }
 
+    // Realm names: a faint label over the heart of each multi-settlement nation.
+    for (const rl of sim.realms) {
+      if (rl.settlementIds.length < 2) continue;
+      const cs = rl.settlementIds.map((id) => sim.settlements.find((s) => s.id === id)).filter(Boolean) as typeof sim.settlements;
+      if (cs.length < 2) continue;
+      const cx = cs.reduce((t, s) => t + s.center.x, 0) / cs.length;
+      const cy = cs.reduce((t, s) => t + s.center.y, 0) / cs.length;
+      const px = offX + (cx + 0.5) * ppt;
+      const py = offY + (cy + 0.5) * ppt;
+      ctx.fillStyle = `hsla(${Math.round(rl.hue)},45%,72%,0.55)`;
+      ctx.font = `${Math.max(11, Math.min(20, ppt * 0.9)).toFixed(0)}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText(rl.name.toUpperCase(), px, py + ppt * 0.3);
+    }
+
     // Transient links between settlements: teal caravans for trade, red flashes
     // for raids. TTL scales with view speed so they stay visible ~1s of real
     // time whether we're watching at 1x or 60x.
@@ -800,7 +874,7 @@ function MapView({
 
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
-      <canvas ref={canvasRef} onClick={onClick} style={{ width: "100%", borderRadius: 8, border: "1px solid #23252c", cursor: "pointer", display: "block" }} />
+      <canvas ref={canvasRef} onClick={onClick} style={{ width: "100%", cursor: "pointer", display: "block" }} />
     </div>
   );
 }
@@ -987,28 +1061,25 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
 }
 
 function PopGraph({ sim }: { sim: SimulationState }): JSX.Element {
-  const data = sim.metrics.slice(-160);
+  const data = sim.metrics.slice(-200);
   const max = Math.max(4, ...data.map((d) => d.population));
   return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 12, color: "#9aa", marginBottom: 4 }}>Population over time</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 60, width: "100%", overflow: "hidden", background: "#101218", padding: 4, border: "1px solid #23252c" }}>
-        {data.map((d, i) => (
-          <div
-            key={i}
-            title={`yr ${d.year}: ${d.population}`}
-            style={{ flex: "1 1 0", minWidth: 0, height: `${(d.population / max) * 100}%`, background: d.deaths > d.births ? "#9c5a5a" : "#4f8f6a" }}
-          />
-        ))}
-      </div>
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 64, width: "100%", overflow: "hidden", background: "#0c0e15", borderRadius: 7, padding: 5, border: "1px solid var(--border-soft)" }}>
+      {data.map((d, i) => (
+        <div
+          key={i}
+          title={`yr ${d.year}: ${d.population}`}
+          style={{ flex: "1 1 0", minWidth: 0, height: `${(d.population / max) * 100}%`, borderRadius: "2px 2px 0 0", background: d.deaths > d.births ? "#b06a6a" : "#5aa37c" }}
+        />
+      ))}
     </div>
   );
 }
 
 function Panel(props: { title: string; children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: 10, background: "#111319" }}>
-      <h3 style={{ margin: "0 0 8px", fontSize: 13, letterSpacing: 0.4, color: "#c7cad1", textTransform: "uppercase" }}>{props.title}</h3>
+    <div className="panel">
+      <h3>{props.title}</h3>
       {props.children}
     </div>
   );
@@ -1016,22 +1087,22 @@ function Panel(props: { title: string; children: React.ReactNode }): JSX.Element
 
 function Metric({ label, value }: { label: string; value: number }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: "6px 10px", minWidth: 96, background: "#111319" }}>
-      <div style={{ fontSize: 11, color: "#8a8f98" }}>{label}</div>
-      <strong style={{ fontSize: 16 }}>{value}</strong>
+    <div className="metric">
+      <div className="k">{label}</div>
+      <div className="v">{value}</div>
     </div>
   );
 }
 
 function Row({ k, v }: { k: string; v: string }): JSX.Element {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5, padding: "1px 0" }}>
-      <span style={{ color: "#8a8f98" }}>{k}</span>
+    <div className="row">
+      <span className="k">{k}</span>
       <span style={{ textAlign: "right" }}>{v}</span>
     </div>
   );
 }
 
 function Muted({ children }: { children: React.ReactNode }): JSX.Element {
-  return <span style={{ color: "#667", fontSize: 12 }}>{children}</span>;
+  return <span className="muted">{children}</span>;
 }

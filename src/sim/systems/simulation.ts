@@ -19,6 +19,7 @@ import {
   LifeStage,
   MetricsSnapshot,
   Milestone,
+  Realm,
   ResourceType,
   Settlement,
   SimulationState,
@@ -73,6 +74,10 @@ export class SimulationEngine {
       if (!this.state.epic) {
         this.state.epic = [];
         this.state.nextPopMilestone = 50;
+      }
+      if (!this.state.realms) {
+        this.state.realms = [];
+        this.state.nextRealmNum = 1;
       }
       this.rng = new Rng(existingState.rngSeed);
       this.reindex();
@@ -139,6 +144,8 @@ export class SimulationEngine {
       settlements: [],
       nextSettlementNum: 1,
       beliefs: [],
+      realms: [],
+      nextRealmNum: 1,
       links: [],
       epic: [],
       nextPopMilestone: 50,
@@ -1039,6 +1046,79 @@ export class SimulationEngine {
     }
   }
 
+  // Group settlements bound by a shared faith and proximity into persistent
+  // realms (peoples/nations), matched to last tick's realms by overlap so a
+  // nation keeps its identity as it grows or fragments.
+  private updateRealms(): void {
+    const sets = this.state.settlements;
+    const prev = new Map<string, string>();
+    for (const rl of this.state.realms) for (const sid of rl.settlementIds) prev.set(sid, rl.id);
+
+    const R = 12;
+    const visited = new Set<string>();
+    const components: Settlement[][] = [];
+    for (const s of sets) {
+      if (visited.has(s.id)) continue;
+      const comp: Settlement[] = [];
+      const queue = [s];
+      visited.add(s.id);
+      while (queue.length) {
+        const cur = queue.pop()!;
+        comp.push(cur);
+        for (const o of sets) {
+          if (visited.has(o.id)) continue;
+          const same = (cur.beliefId ?? "none") === (o.beliefId ?? "none");
+          const d = Math.abs(cur.center.x - o.center.x) + Math.abs(cur.center.y - o.center.y);
+          if (same && d <= R) {
+            visited.add(o.id);
+            queue.push(o);
+          }
+        }
+      }
+      components.push(comp);
+    }
+
+    const claimed = new Set<string>();
+    const survivors: Realm[] = [];
+    for (const comp of components) {
+      const tally = new Map<string, number>();
+      for (const s of comp) {
+        const pid = prev.get(s.id);
+        if (pid) tally.set(pid, (tally.get(pid) ?? 0) + 1);
+      }
+      let bestId: string | undefined;
+      let best = 0;
+      for (const [rid, n] of tally) if (n > best && !claimed.has(rid)) {
+        best = n;
+        bestId = rid;
+      }
+      let realm = bestId ? this.state.realms.find((r) => r.id === bestId) : undefined;
+      if (!realm) {
+        const num = this.state.nextRealmNum++;
+        realm = {
+          id: `realm-${num}`,
+          name: makeWord(this.state.language, this.rng, 2, 3),
+          hue: this.rng.range(0, 360),
+          settlementIds: [],
+          foundedTick: this.state.tick,
+          populationPeak: 0,
+        };
+        this.state.realms.push(realm);
+      }
+      claimed.add(realm.id);
+      const wasMulti = realm.settlementIds.length >= 2;
+      realm.settlementIds = comp.map((s) => s.id);
+      realm.beliefId = comp.find((s) => s.beliefId)?.beliefId;
+      const pop = comp.reduce((t, s) => t + s.memberIds.length, 0);
+      realm.populationPeak = Math.max(realm.populationPeak, pop);
+      if (!wasMulti && comp.length >= 2 && !this.state.epic.some((e) => e.message.startsWith(`The realm of ${realm!.name}`))) {
+        this.milestone("settlement", `The realm of ${realm.name} unites ${comp.length} settlements.`);
+      }
+      survivors.push(realm);
+    }
+    this.state.realms = survivors;
+  }
+
   // ----------------------------------------------------------- settlements
 
   private updateSettlements(): void {
@@ -1353,6 +1433,7 @@ export class SimulationEngine {
 
       this.updateSettlements();
       this.updateBeliefs();
+      this.updateRealms();
       this.updatePlagues();
       this.interSettlement();
       if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
