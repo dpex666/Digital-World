@@ -144,6 +144,8 @@ export interface Household {
   toolLevel: number;
   settlementId?: ID;
   foundedTick: number;
+  migrateBias?: number; // learned propensity to move on, reinforced by whether moving improved their land
+  beliefId?: ID; // the faith the family carries, so pioneers take their gods to new colonies
 }
 
 export interface Settlement {
@@ -160,12 +162,33 @@ export interface Settlement {
   beliefId?: ID;
   devotion: number;
   plague?: number; // active epidemic intensity (0/undefined = healthy)
+  // Learned diplomacy: a reinforcement-learned policy over how to treat
+  // neighbours, updated by how each choice affects the settlement's wellbeing.
+  // War and peace are discovered here, not dictated by a coded formula.
+  policy?: { raid: number; trade: number; abstain: number };
+  lastMacroAction?: "raid" | "trade" | "abstain";
+  macroBaseline?: number;
+  lastWellbeing?: number;
   culture: {
     cooperation: number;
     tradePreference: number;
     aggression: number;
     innovation: number;
   };
+}
+
+// A people / nation: settlements bound by a shared faith and proximity, with
+// their own name and colour. Realms form, grow, and fragment as faiths spread
+// and villages rise and fall.
+export interface Realm {
+  id: ID;
+  name: string;
+  hue: number;
+  beliefId?: ID;
+  capitalId?: ID;
+  settlementIds: ID[];
+  foundedTick: number;
+  populationPeak: number;
 }
 
 // An emergent faith. Founded by a settlement, named in the people's own tongue,
@@ -278,6 +301,16 @@ export interface WorldLink {
   tick: number;
 }
 
+// A persistent trade road between two settlements. Its strength is reinforced
+// every time a caravan travels it and decays when commerce lapses, so the road
+// network is emergent infrastructure — it forms where trade actually flows.
+export interface TradeRoute {
+  a: ID;
+  b: ID;
+  strength: number;
+  lastTick: number;
+}
+
 export interface HistoryEvent {
   id: ID;
   tick: number;
@@ -333,7 +366,10 @@ export interface SimulationState {
   settlements: Settlement[];
   nextSettlementNum: number;
   beliefs: Belief[];
+  realms: Realm[];
+  nextRealmNum: number;
   links: WorldLink[];
+  routes: TradeRoute[];
   epic: Milestone[];
   nextPopMilestone: number;
   history: HistoryEvent[];

@@ -19,11 +19,13 @@ import {
   LifeStage,
   MetricsSnapshot,
   Milestone,
+  Realm,
   ResourceType,
   Settlement,
   SimulationState,
   TechEffects,
   Technique,
+  TradeRoute,
   Vec2,
 } from "../core/types";
 import { makeId } from "../util/id";
@@ -62,6 +64,11 @@ export class SimulationEngine {
 
   private byId = new Map<string, Character>();
   private spatial = new Map<string, Character[]>();
+  // Per-tick indexes that collapse hot O(N×households / N×structures / N×settlements)
+  // lookups to O(1), so dense worlds stay fast.
+  private byHousehold = new Map<string, Household>();
+  private bySettlement = new Map<string, Settlement>();
+  private structureIndex = new Map<string, Set<string>>();
   private tech: TechEffects = zeroEffects(); // aggregated discovered-technique effects
   private popNow = 2; // living population at the start of the current tick
 
@@ -69,10 +76,15 @@ export class SimulationEngine {
     if (existingState) {
       this.state = existingState;
       if (!this.state.links) this.state.links = []; // back-compat with older saves
+      if (!this.state.routes) this.state.routes = [];
       if (!this.state.beliefs) this.state.beliefs = [];
       if (!this.state.epic) {
         this.state.epic = [];
         this.state.nextPopMilestone = 50;
+      }
+      if (!this.state.realms) {
+        this.state.realms = [];
+        this.state.nextRealmNum = 1;
       }
       this.rng = new Rng(existingState.rngSeed);
       this.reindex();
@@ -139,7 +151,10 @@ export class SimulationEngine {
       settlements: [],
       nextSettlementNum: 1,
       beliefs: [],
+      realms: [],
+      nextRealmNum: 1,
       links: [],
+      routes: [],
       epic: [],
       nextPopMilestone: 50,
       history: [],
@@ -193,12 +208,36 @@ export class SimulationEngine {
 
   private household(id?: string): Household | undefined {
     if (!id) return undefined;
-    return this.state.households.find((h) => h.id === id);
+    return this.byHousehold.get(id) ?? this.state.households.find((h) => h.id === id);
+  }
+
+  private settlementById(id?: string): Settlement | undefined {
+    if (!id) return undefined;
+    return this.bySettlement.get(id) ?? this.state.settlements.find((s) => s.id === id);
   }
 
   private hasStructure(homeId: string | undefined, type: string): boolean {
     if (!homeId) return false;
+    const set = this.structureIndex.get(homeId);
+    if (set) return set.has(type);
     return this.state.structures.some((s) => s.type === type && s.ownerHouseholdId === homeId);
+  }
+
+  private rebuildIndexes(): void {
+    this.byHousehold.clear();
+    for (const h of this.state.households) this.byHousehold.set(h.id, h);
+    this.bySettlement.clear();
+    for (const s of this.state.settlements) this.bySettlement.set(s.id, s);
+    this.structureIndex.clear();
+    for (const st of this.state.structures) {
+      if (!st.ownerHouseholdId) continue;
+      let set = this.structureIndex.get(st.ownerHouseholdId);
+      if (!set) {
+        set = new Set();
+        this.structureIndex.set(st.ownerHouseholdId, set);
+      }
+      set.add(st.type);
+    }
   }
 
   private findCradle(tiles: SimulationState["world"]["tiles"], width: number, height: number): Vec2 {
@@ -290,7 +329,7 @@ export class SimulationEngine {
 
   private settlementKnowledge(c: Character): number {
     if (!c.settlementId) return 0;
-    return this.state.settlements.find((s) => s.id === c.settlementId)?.knowledge ?? 0;
+    return this.settlementById(c.settlementId)?.knowledge ?? 0;
   }
 
   // Physical feasibility / bodily capability only — no strategic hints. Whether
@@ -621,27 +660,30 @@ export class SimulationEngine {
   }
 
   // Pick a habitable tile a few steps away to found a new household on, so the
-  // population fans out from the cradle over generations.
+  // population fans out from the cradle over generations. A new couple seeks
+  // fertile *open* land in whatever direction it lies — drawn to good ground and
+  // away from crowding — rather than blindly pushing toward a fixed bearing. This
+  // keeps the people spreading across the whole world instead of heaping into one
+  // corner.
   private findDispersalSite(from: Vec2): Vec2 {
     const w = this.state.world.width;
     const h = this.state.world.height;
-    // Bias movement outward from the world's centre, so each generation pushes
-    // the frontier into open land rather than circling the cradle.
-    const outward = Math.atan2(from.y - h / 2, from.x - w / 2);
     let fallback: Vec2 = { ...from };
     let best: Vec2 | null = null;
-    let bestFert = -1;
-    for (let attempt = 0; attempt < 14; attempt += 1) {
-      const ang = outward + this.rng.range(-1.3, 1.3);
-      const dist = 3 + this.rng.int(8);
+    let bestScore = -Infinity;
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      const ang = this.rng.range(0, Math.PI * 2);
+      const dist = 3 + this.rng.int(9);
       const nx = Math.round(from.x + Math.cos(ang) * dist);
       const ny = Math.round(from.y + Math.sin(ang) * dist);
-      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
       const t = this.state.world.tiles[ny][nx];
       if (t.terrain === "water" || t.terrain === "mountain") continue;
       fallback = { x: nx, y: ny };
-      if (t.fertility > bestFert) {
-        bestFert = t.fertility;
+      const crowd = Math.min(8, this.nearby({ x: nx, y: ny }, 2).length);
+      const score = t.fertility * 5 + (t.resources.food ?? 0) - t.hazard * 3 - crowd * 0.8;
+      if (score > bestScore) {
+        bestScore = score;
         best = { x: nx, y: ny };
       }
     }
@@ -669,7 +711,7 @@ export class SimulationEngine {
     // self-throttles as numbers approach the land's carrying capacity.
     const earlyBoom = 1 + 7 * Math.max(0, 1 - this.popNow / 90);
     // A faith that prizes fertility quickens its followers' families.
-    const st = c.settlementId ? this.state.settlements.find((s) => s.id === c.settlementId) : undefined;
+    const st = c.settlementId ? this.settlementById(c.settlementId) : undefined;
     const faith = st?.beliefId ? this.beliefById(st.beliefId) : undefined;
     const faithFert = faith ? 1 + faith.tenets.fertility * 0.3 * st!.devotion : 1;
 
@@ -773,13 +815,29 @@ export class SimulationEngine {
   private maybeMigrate(home: Household): void {
     const occupant = home.memberIds.map((id) => this.byId.get(id)).find((c) => c?.alive && c.lifeStage !== "infant");
     if (!occupant) return;
+    if (home.migrateBias === undefined) home.migrateBias = 0.12;
     const tile = this.state.world.tiles[home.location.y][home.location.x];
     const local = (tile.resources.food ?? 0) + (home.storage.food ?? 0);
-    if (local > 2.5 || this.hasStructure(home.id, "cultivation")) return;
-    if (this.rng.next() > 0.1) return;
+    const settled = this.hasStructure(home.id, "cultivation");
 
+    // Frontier pull: a crowded home with little spare land nearby feels the urge
+    // to strike out for open country far away. Whether a lineage acts on that
+    // urge is its learned wanderlust — pioneers breed pioneers, homebodies stay.
+    const crowd = this.nearby(home.location, 3).length;
+    if (!settled && crowd >= 9 && local < 6 && this.rng.next() < home.migrateBias * 0.5) {
+      this.pioneer(home);
+      return;
+    }
+
+    if (local > 2.5 || settled) return;
+    // Learned wanderlust: the propensity to move on is reinforced when moving
+    // finds better land and decays when it doesn't, so lineages that benefit
+    // from roaming keep roaming and those that don't settle down.
+    if (this.rng.next() > home.migrateBias) return;
+
+    const hereScore = (tile.resources.food ?? 0) + tile.fertility * 4;
     let best: Vec2 | null = null;
-    let bestScore = (tile.resources.food ?? 0) + tile.fertility * 4;
+    let bestScore = hereScore;
     for (const d of NEIGHBORS) {
       const nx = home.location.x + d.x;
       const ny = home.location.y + d.y;
@@ -792,12 +850,55 @@ export class SimulationEngine {
         best = { x: nx, y: ny };
       }
     }
+    // Reinforce: a worthwhile move strengthens wanderlust; a wasted urge to move
+    // (no better land found) weakens it.
+    home.migrateBias = best
+      ? Math.min(0.6, home.migrateBias + 0.05 * Math.min(1, (bestScore - hereScore) / 4))
+      : Math.max(0.03, home.migrateBias - 0.03);
     if (best) {
       home.location = best;
       for (const id of home.memberIds) {
         const mm = this.byId.get(id);
         if (mm && mm.alive) mm.location = { ...best };
       }
+    }
+  }
+
+  // A great journey: a pioneer family leaves the crowd behind and travels far to
+  // settle open, fertile country — the seed of a new frontier settlement. The
+  // reach of the journey grows with the lineage's learned wanderlust.
+  private pioneer(home: Household): void {
+    const w = this.state.world.width;
+    const h = this.state.world.height;
+    const reach = Math.round(7 + (home.migrateBias ?? 0.12) * 16);
+    let best: Vec2 | null = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < 26; i += 1) {
+      const ang = this.rng.range(0, Math.PI * 2);
+      const dist = this.rng.range(reach * 0.5, reach);
+      const nx = Math.round(home.location.x + Math.cos(ang) * dist);
+      const ny = Math.round(home.location.y + Math.sin(ang) * dist);
+      if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
+      const t = this.state.world.tiles[ny][nx];
+      if (t.terrain === "water" || t.terrain === "mountain") continue;
+      // Prefer fertile, low-hazard, *open* land — the appeal of empty frontier.
+      const openness = 8 - Math.min(8, this.nearby({ x: nx, y: ny }, 3).length);
+      const score = t.fertility * 5 + (t.resources.food ?? 0) - t.hazard * 4 + openness * 1.4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x: nx, y: ny };
+      }
+    }
+    const hereFert = this.state.world.tiles[home.location.y][home.location.x].fertility * 5;
+    if (best && bestScore > hereFert) {
+      home.location = best;
+      for (const id of home.memberIds) {
+        const mm = this.byId.get(id);
+        if (mm && mm.alive) mm.location = { ...best };
+      }
+      home.migrateBias = Math.min(0.7, (home.migrateBias ?? 0.12) + 0.04);
+    } else {
+      home.migrateBias = Math.max(0.03, (home.migrateBias ?? 0.12) - 0.02);
     }
   }
 
@@ -846,69 +947,147 @@ export class SimulationEngine {
     return moved;
   }
 
-  // Each tick, neighbouring settlements may trade or raid, driven by their own
-  // emergent cultures (trade preference vs. aggression) and how hungry they are.
-  private interSettlement(): void {
-    const sets = this.state.settlements.filter((s) => s.memberIds.length >= 3);
-    const food = this.state.elements.food.name;
-    for (let i = 0; i < sets.length; i += 1) {
-      for (let j = i + 1; j < sets.length; j += 1) {
-        const a = sets[i];
-        const b = sets[j];
-        const dist = Math.abs(a.center.x - b.center.x) + Math.abs(a.center.y - b.center.y);
-        if (dist > 20) continue;
-        const proximity = 1 - dist / 20;
-        const tradeDrive = (a.culture.tradePreference + b.culture.tradePreference) / 2;
-        const hostility = (a.culture.aggression + b.culture.aggression) / 2;
-        const aPer = this.settlementFoodPer(a);
-        const bPer = this.settlementFoodPer(b);
-        const gap = Math.abs(aPer - bPer);
-        const scarcity = Math.max(0, 1 - Math.min(aPer, bPer) / 3);
+  private settlementWellbeing(s: Settlement): number {
+    return this.settlementFoodPer(s) + 0.15 * s.memberIds.length;
+  }
 
-        // Border friction: close, hungry neighbours grow warier of each other.
-        if (proximity > 0.3 && scarcity > 0.45) {
-          a.culture.aggression = Math.min(1, a.culture.aggression + 0.004);
-          b.culture.aggression = Math.min(1, b.culture.aggression + 0.004);
-        }
+  private ensurePolicy(s: Settlement): void {
+    if (!s.policy) {
+      s.policy = { raid: 1, trade: 1, abstain: 1.4 }; // begin disposed to peace, then learn
+      s.lastMacroAction = "abstain";
+      s.macroBaseline = 0;
+      s.lastWellbeing = this.settlementWellbeing(s);
+    }
+  }
 
-        // Faith binds or divides: shared belief keeps the peace and quickens
-        // trade; rival faiths, held with devotion, inflame holy war.
-        const sameFaith = !!a.beliefId && a.beliefId === b.beliefId;
-        const rivalFaith = !!a.beliefId && !!b.beliefId && a.beliefId !== b.beliefId;
-        const raidMod = sameFaith ? 0.2 : rivalFaith ? 1 + 0.9 * ((a.devotion + b.devotion) / 2) : 1;
-        const tradeMod = sameFaith ? 1.7 : rivalFaith ? 0.7 : 1;
-
-        const r = this.rng.next();
-        // Raids are driven mostly by hostility and proximity (territory and
-        // loot), with hunger sharpening them — but kept occasional so war is
-        // dramatic, not a constant population-crusher.
-        const raidChance = 0.03 * proximity * hostility * (0.4 + scarcity) * raidMod;
-        const tradeChance = 0.05 * proximity * tradeDrive * Math.min(1, gap / 3) * tradeMod;
-
-        if (hostility > 0.28 && r < raidChance) {
-          this.raid(a, b, food, rivalFaith);
-        } else if (gap > 1.5 && r < raidChance + tradeChance) {
-          const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
-          const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length);
-          if (amount > 0.5) {
-            rich.knowledge = Math.min(8, rich.knowledge + 0.02);
-            poor.knowledge = Math.min(8, poor.knowledge + 0.03);
-            rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
-            poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
-            this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
-            // Faith travels with the caravans: a devout trading partner may win converts.
-            if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.03 * rich.devotion) {
-              const faith = this.beliefById(rich.beliefId);
-              poor.beliefId = rich.beliefId;
-              poor.devotion = 0.25;
-              this.log("belief", `${poor.name} embraced the faith of ${faith?.name ?? "their neighbours"} through trade with ${rich.name}.`);
-            }
-            // Trade is constant; only chronicle it now and then so the feed stays varied.
-            if (this.rng.next() < 0.2) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
-          }
-        }
+  private nearestSettlement(s: Settlement): Settlement | undefined {
+    let best: Settlement | undefined;
+    let bestD = 21;
+    for (const o of this.state.settlements) {
+      if (o === s || o.memberIds.length < 2) continue;
+      const d = Math.abs(o.center.x - s.center.x) + Math.abs(o.center.y - s.center.y);
+      if (d < bestD) {
+        bestD = d;
+        best = o;
       }
     }
+    return best;
+  }
+
+  // Choose how to treat a neighbour by sampling the learned policy, weighted by
+  // what is actually feasible (strength for a raid, surplus for a trade) and by
+  // faith kinship as a disposition — but the *propensity* to war or trade is
+  // learned, not coded.
+  private chooseMacro(s: Settlement, n: Settlement): "raid" | "trade" | "abstain" {
+    const p = s.policy!;
+    const force = this.settlementForce(s) / (this.settlementForce(n) + 1);
+    const sameFaith = !!s.beliefId && s.beliefId === n.beliefId;
+    const raidFeas = Math.max(0.04, Math.min(2, force - 0.6)) * (sameFaith ? 0.35 : 1);
+    const sPer = this.settlementFoodPer(s);
+    const nPer = this.settlementFoodPer(n);
+    const tradeFeas = sPer > nPer ? Math.min(1.4, (sPer - nPer) / 3 + 0.2) : 0.15;
+    const feas = { raid: raidFeas, trade: tradeFeas, abstain: 0.6 };
+    const acts = ["raid", "trade", "abstain"] as const;
+    const weights = acts.map((a) => Math.pow(Math.max(0.05, p[a]), 1.5) * feas[a]);
+    const total = weights.reduce((t, w) => t + w, 0);
+    let roll = this.rng.next() * total;
+    for (let i = 0; i < acts.length; i += 1) {
+      roll -= weights[i];
+      if (roll <= 0) return acts[i];
+    }
+    return "abstain";
+  }
+
+  private reinforceMacro(s: Settlement): void {
+    const w = this.settlementWellbeing(s);
+    const reward = w - (s.lastWellbeing ?? w);
+    const adv = reward - (s.macroBaseline ?? 0);
+    const lr = 0.06;
+    const act = s.lastMacroAction ?? "abstain";
+    s.policy![act] = Math.max(0.1, Math.min(5, s.policy![act] + lr * Math.max(-3, Math.min(3, adv))));
+    s.macroBaseline = (s.macroBaseline ?? 0) + 0.05 * (reward - (s.macroBaseline ?? 0));
+    // light regularisation so no strategy dies out entirely
+    const mean = (s.policy!.raid + s.policy!.trade + s.policy!.abstain) / 3;
+    for (const a of ["raid", "trade", "abstain"] as const) s.policy![a] += 0.02 * (mean - s.policy![a]);
+    s.lastWellbeing = w;
+  }
+
+  // Each settlement, now and then, reflects on how it has fared and chooses how
+  // to treat its nearest neighbour — its diplomacy emerges from reinforcement,
+  // not from a hand-tuned probability of war.
+  private interSettlement(): void {
+    const food = this.state.elements.food.name;
+    for (const s of this.state.settlements) {
+      if (s.memberIds.length < 3) continue;
+      this.ensurePolicy(s);
+      if (this.rng.next() > 0.03) continue; // occasional macro-move
+      this.reinforceMacro(s); // judge the last choice's outcome, then decide anew
+      const n = this.nearestSettlement(s);
+      if (!n) {
+        s.lastMacroAction = "abstain";
+        continue;
+      }
+      const action = this.chooseMacro(s, n);
+      s.lastMacroAction = action;
+      if (action === "raid") {
+        const rivalFaith = !!s.beliefId && !!n.beliefId && s.beliefId !== n.beliefId;
+        this.raid(s, n, food, rivalFaith);
+      } else if (action === "trade") {
+        this.tradeBetween(s, n, food);
+      }
+    }
+  }
+
+  // Reinforce the road between two trading settlements; commerce that recurs
+  // wears a stronger path. Roads are keyed by the unordered settlement pair.
+  private reinforceRoute(s1: string, s2: string): void {
+    const [a, b] = s1 < s2 ? [s1, s2] : [s2, s1];
+    let route = this.state.routes.find((r) => r.a === a && r.b === b);
+    if (!route) {
+      route = { a, b, strength: 0, lastTick: this.state.tick };
+      this.state.routes.push(route);
+    }
+    route.strength = Math.min(1, route.strength + 0.06);
+    route.lastTick = this.state.tick;
+  }
+
+  // Roads fade when commerce lapses; once faint or once a settlement is gone,
+  // the road is forgotten. Emergent infrastructure, sustained only by use.
+  private updateRoutes(): void {
+    const live = new Set(this.state.settlements.map((s) => s.id));
+    const kept: TradeRoute[] = [];
+    for (const r of this.state.routes) {
+      if (!live.has(r.a) || !live.has(r.b)) continue;
+      r.strength -= 0.0009;
+      if (r.strength > 0.04) kept.push(r);
+    }
+    this.state.routes = kept;
+  }
+
+  private tradeBetween(a: Settlement, b: Settlement, food: string): void {
+    const aPer = this.settlementFoodPer(a);
+    const bPer = this.settlementFoodPer(b);
+    const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
+    const gap = Math.abs(aPer - bPer);
+    const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length + 1);
+    if (amount <= 0.5) return;
+    rich.knowledge = Math.min(8, rich.knowledge + 0.02);
+    poor.knowledge = Math.min(8, poor.knowledge + 0.03);
+    rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
+    poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
+    this.reinforceRoute(rich.id, poor.id);
+    this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
+    // Conversion flows from the devout and prospering to the doubting: the
+    // poorer partner's openness is the inverse of its own (fortune-driven)
+    // devotion, so the gods of the successful spread to those whose faith has
+    // faltered.
+    if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.06 * rich.devotion * (1 - poor.devotion)) {
+      const faith = this.beliefById(rich.beliefId);
+      poor.beliefId = rich.beliefId;
+      poor.devotion = 0.25;
+      this.log("belief", `${poor.name} embraced the faith of ${faith?.name ?? "their neighbours"} through trade with ${rich.name}.`);
+    }
+    if (this.rng.next() < 0.25) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
   }
 
   private raid(a: Settlement, b: Settlement, food: string, holy = false): void {
@@ -926,12 +1105,18 @@ export class SimulationEngine {
         }
       }
     }
+    // War is costly to the aggressor too — so raiding only pays against a
+    // genuinely weaker foe, and learned diplomacy must weigh that.
     for (const id of agg.memberIds) {
       const m = this.byId.get(id);
-      if (m && m.alive && this.rng.next() < 0.04) m.health = Math.max(1, m.health - this.rng.range(2, 8));
+      if (m && m.alive && this.rng.next() < 0.08) {
+        m.health -= this.rng.range(3, 13);
+        if (m.health <= 0) this.kill(m, `the war on ${vic.name}`);
+      }
     }
     vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
     agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
+    vic.devotion = Math.max(0, vic.devotion - 0.04); // defeat shakes the loser's faith
     this.state.links.push({ from: { ...agg.center }, to: { ...vic.center }, kind: "raid", tick: this.state.tick });
     const verb = holy ? "waged holy war on" : "raided";
     this.log(
@@ -940,6 +1125,24 @@ export class SimulationEngine {
     );
     if (holy && !this.state.epic.some((e) => e.kind === "war")) {
       this.milestone("war", `The first holy war erupts: ${agg.name} falls upon ${vic.name}.`);
+    }
+
+    // Conquest: an overwhelming victor in a war of faith may annex the loser —
+    // forcing its conversion, so the realm-grouping absorbs it next tick. Borders
+    // shift, and empires rise on the ruins of the conquered.
+    if (
+      agg.beliefId &&
+      agg.beliefId !== vic.beliefId &&
+      this.settlementForce(agg) > this.settlementForce(vic) * 1.6 &&
+      vic.memberIds.length >= 2 &&
+      this.rng.next() < 0.07
+    ) {
+      const faith = this.beliefById(agg.beliefId);
+      vic.beliefId = agg.beliefId;
+      vic.devotion = 0.2;
+      vic.culture.aggression = Math.max(0, vic.culture.aggression - 0.1);
+      this.log("conflict", `${agg.name} conquered ${vic.name}, annexing it under the faith of ${faith?.name ?? "the victors"}.`);
+      this.milestone("war", `${agg.name} conquers ${vic.name}.`);
     }
   }
 
@@ -950,15 +1153,47 @@ export class SimulationEngine {
     return this.state.beliefs.find((b) => b.id === id);
   }
 
+  // A being's standing — the lived success that earns it a hearing. Prophets,
+  // leaders and exemplars emerge from this, not from a flat dice roll.
+  private standing(c: Character): number {
+    const home = this.household(c.householdId);
+    const fed = home && (home.storage.food ?? 0) > home.memberIds.length ? 0.6 : 0;
+    return (
+      Math.min(2, c.ageDays / YEAR / 35) +
+      c.lineage.children.length * 0.25 +
+      Math.min(1, c.relationships.length * 0.05) +
+      c.intelligence * 0.5 +
+      c.education * 0.6 +
+      c.personality.curiosity * 0.4 +
+      fed
+    );
+  }
+
   private foundBelief(s: Settlement, founder?: Character): void {
-    const r = () => this.rng.range(-1, 1);
+    const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+    const p = founder?.personality;
+    // A faith reflects the soul of its prophet: the sociable preach community,
+    // the aggressive a militant creed, the curious an inquisitive one.
+    const tenets = p
+      ? {
+          cooperation: clamp((p.sociability - 0.5) * 2 + this.rng.range(-0.3, 0.3)),
+          aggression: clamp((p.aggression - 0.35) * 2.5 + this.rng.range(-0.3, 0.3)),
+          innovation: clamp((p.curiosity - 0.5) * 2 + this.rng.range(-0.3, 0.3)),
+          fertility: Math.max(0, this.rng.range(-0.4, 1)),
+        }
+      : {
+          cooperation: this.rng.range(-1, 1),
+          aggression: this.rng.range(-1, 1),
+          innovation: this.rng.range(-1, 1),
+          fertility: Math.max(0, this.rng.range(-1, 1)),
+        };
     const belief: Belief = {
       id: makeId("faith"),
       name: wordFor(this.state.language, this.rng, `faith-${this.state.beliefs.length}`),
       hue: this.rng.range(0, 360),
       foundedTick: this.state.tick,
       founderId: founder?.id,
-      tenets: { cooperation: r(), aggression: r(), innovation: r(), fertility: Math.max(0, r()) },
+      tenets,
     };
     this.state.beliefs.push(belief);
     s.beliefId = belief.id;
@@ -1021,15 +1256,41 @@ export class SimulationEngine {
           s.beliefId = undefined;
           continue;
         }
-        s.devotion = Math.min(1, s.devotion + 0.0015);
+        // Faith is adaptive to lived fortune: devotion deepens when the people
+        // prosper under it, and erodes through famine and plague — a crisis of
+        // faith. Belief is reinforced (or refuted) by outcomes, not assumed.
+        const fed = this.settlementFoodPer(s) > 3;
+        const plagued = (s.plague ?? 0) > 0;
+        s.devotion = Math.max(0, Math.min(1, s.devotion + (fed && !plagued ? 0.0015 : -0.0014)));
+        if (s.devotion <= 0.03) {
+          // The faith has failed them; the people abandon it.
+          this.log("belief", `${s.name} loses its faith in ${b.name}.`);
+          s.beliefId = undefined;
+          s.devotion = 0;
+          continue;
+        }
         const d = 0.012 * s.devotion;
         s.culture.cooperation = Math.max(0, Math.min(1, s.culture.cooperation + b.tenets.cooperation * d));
         s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression + b.tenets.aggression * d));
         s.culture.innovation = Math.max(0, Math.min(1, s.culture.innovation + b.tenets.innovation * d));
       } else if (s.memberIds.length >= 4) {
-        const leader = this.byId.get(s.leaderId ?? "");
-        const spark = leader ? leader.intelligence * (0.4 + leader.education) * (0.3 + leader.personality.curiosity) : 0.3;
-        if (this.rng.next() < 0.0006 * spark) this.foundBelief(s, leader);
+        // A prophet is not appointed — it emerges. Whoever in the settlement has
+        // earned the most standing through their lived success is the one whose
+        // vision can take root and spread to others.
+        let prophet: Character | undefined;
+        let bestStanding = 0;
+        for (const id of s.memberIds) {
+          const m = this.byId.get(id);
+          if (!m || !m.alive || (m.lifeStage !== "adult" && m.lifeStage !== "elder")) continue;
+          const st = this.standing(m);
+          if (st > bestStanding) {
+            bestStanding = st;
+            prophet = m;
+          }
+        }
+        // The more a prophet's curiosity drives them, the likelier the spark.
+        const spark = prophet ? bestStanding * (0.4 + prophet.personality.curiosity) : 0;
+        if (prophet && this.rng.next() < 0.00045 * spark) this.foundBelief(s, prophet);
       }
     }
     // Keep the registry bounded; forgotten faiths fade from the record.
@@ -1037,6 +1298,83 @@ export class SimulationEngine {
       const active = new Set(this.state.settlements.map((s) => s.beliefId).filter((x): x is string => !!x));
       this.state.beliefs = this.state.beliefs.filter((b) => active.has(b.id)).slice(-30);
     }
+  }
+
+  // Group settlements bound by a shared faith and proximity into persistent
+  // realms (peoples/nations), matched to last tick's realms by overlap so a
+  // nation keeps its identity as it grows or fragments.
+  private updateRealms(): void {
+    const sets = this.state.settlements;
+    const prev = new Map<string, string>();
+    for (const rl of this.state.realms) for (const sid of rl.settlementIds) prev.set(sid, rl.id);
+
+    const R = 12;
+    const visited = new Set<string>();
+    const components: Settlement[][] = [];
+    for (const s of sets) {
+      if (visited.has(s.id)) continue;
+      const comp: Settlement[] = [];
+      const queue = [s];
+      visited.add(s.id);
+      while (queue.length) {
+        const cur = queue.pop()!;
+        comp.push(cur);
+        for (const o of sets) {
+          if (visited.has(o.id)) continue;
+          const same = (cur.beliefId ?? "none") === (o.beliefId ?? "none");
+          const d = Math.abs(cur.center.x - o.center.x) + Math.abs(cur.center.y - o.center.y);
+          if (same && d <= R) {
+            visited.add(o.id);
+            queue.push(o);
+          }
+        }
+      }
+      components.push(comp);
+    }
+
+    const claimed = new Set<string>();
+    const survivors: Realm[] = [];
+    for (const comp of components) {
+      const tally = new Map<string, number>();
+      for (const s of comp) {
+        const pid = prev.get(s.id);
+        if (pid) tally.set(pid, (tally.get(pid) ?? 0) + 1);
+      }
+      let bestId: string | undefined;
+      let best = 0;
+      for (const [rid, n] of tally) if (n > best && !claimed.has(rid)) {
+        best = n;
+        bestId = rid;
+      }
+      let realm = bestId ? this.state.realms.find((r) => r.id === bestId) : undefined;
+      if (!realm) {
+        const num = this.state.nextRealmNum++;
+        realm = {
+          id: `realm-${num}`,
+          name: makeWord(this.state.language, this.rng, 2, 3),
+          hue: this.rng.range(0, 360),
+          settlementIds: [],
+          foundedTick: this.state.tick,
+          populationPeak: 0,
+        };
+        this.state.realms.push(realm);
+      }
+      claimed.add(realm.id);
+      const prevSize = realm.settlementIds.length;
+      realm.settlementIds = comp.map((s) => s.id);
+      realm.beliefId = comp.find((s) => s.beliefId)?.beliefId;
+      realm.capitalId = comp.slice().sort((a, b) => b.memberIds.length - a.memberIds.length)[0]?.id;
+      const pop = comp.reduce((t, s) => t + s.memberIds.length, 0);
+      realm.populationPeak = Math.max(realm.populationPeak, pop);
+      if (prevSize < 2 && comp.length >= 2 && !this.state.epic.some((e) => e.message.startsWith(`The realm of ${realm!.name}`))) {
+        this.milestone("settlement", `The realm of ${realm.name} unites ${comp.length} settlements.`);
+      }
+      if (prevSize < 4 && comp.length >= 4 && !this.state.epic.some((e) => e.message.startsWith(`The empire of ${realm!.name}`))) {
+        this.milestone("settlement", `The empire of ${realm.name} spans ${comp.length} settlements.`);
+      }
+      survivors.push(realm);
+    }
+    this.state.realms = survivors;
   }
 
   // ----------------------------------------------------------- settlements
@@ -1058,8 +1396,12 @@ export class SimulationEngine {
         }
       }
       if (nearestId) {
-        this.state.settlements.find((x) => x.id === nearestId)!.householdIds.push(h.id);
+        const host = this.state.settlements.find((x) => x.id === nearestId)!;
+        host.householdIds.push(h.id);
         h.settlementId = nearestId;
+        // A family living under a faith comes to carry it, so it travels with
+        // them if they later set out to found a colony of their own.
+        if (host.beliefId) h.beliefId = host.beliefId;
       } else {
         h.settlementId = undefined;
       }
@@ -1074,10 +1416,27 @@ export class SimulationEngine {
       buckets.set(key, arr);
     }
     for (const [, group] of buckets) {
-      if (group.length < 2) continue;
+      // Two neighbouring families anchor a settlement anywhere; a lone pioneer
+      // family founds a frontier outpost only when it has struck out far from any
+      // existing settlement onto genuinely good ground — so leaps become villages
+      // without every wandering household spawning one next door.
+      if (group.length < 2) {
+        const h0 = group[0];
+        const t0 = this.state.world.tiles[h0.location.y][h0.location.x];
+        const farFromAll = this.state.settlements.every(
+          (s) => Math.abs(s.center.x - h0.location.x) + Math.abs(s.center.y - h0.location.y) >= 8,
+        );
+        if (!(farFromAll && t0.fertility > 0.45 && h0.memberIds.length >= 2)) continue;
+      }
       const cx = Math.round(group.reduce((s, h) => s + h.location.x, 0) / group.length);
       const cy = Math.round(group.reduce((s, h) => s + h.location.y, 0) / group.length);
       const num = this.state.nextSettlementNum++;
+      // A colony inherits the faith its founding families carried with them (the
+      // most common one), so a people's religion spreads with its frontier and
+      // realms grow into multi-settlement nations rather than splintering.
+      const faithTally = new Map<string, number>();
+      for (const h of group) if (h.beliefId && this.beliefById(h.beliefId)) faithTally.set(h.beliefId, (faithTally.get(h.beliefId) ?? 0) + 1);
+      const carried = [...faithTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
       const settlement: Settlement = {
         id: `set-${num}`,
         name: makeWord(this.state.language, this.rng, 2, 3),
@@ -1088,8 +1447,13 @@ export class SimulationEngine {
         knowledge: 0.05,
         foundedTick: this.state.tick,
         populationPeak: 0,
-        devotion: 0,
+        beliefId: carried,
+        devotion: carried ? 0.35 : 0,
         plague: 0,
+        policy: { raid: 1, trade: 1, abstain: 1.4 },
+        lastMacroAction: "abstain",
+        macroBaseline: 0,
+        lastWellbeing: 0,
         culture: { cooperation: 0.4, tradePreference: 0.3, aggression: 0.2, innovation: 0.3 },
       };
       for (const h of group) h.settlementId = settlement.id;
@@ -1118,9 +1482,32 @@ export class SimulationEngine {
         .map((st) => st.id);
       s.populationPeak = Math.max(s.populationPeak, members.length);
 
+      // Leadership emerges from the same lived standing that raises prophets:
+      // whoever has earned the most influence holds sway, weighted also by their
+      // social pull. An incumbent keeps a small edge, so authority is stable and
+      // only passes when a clearly worthier figure rises — succession, not churn.
       const adults = members.filter((m) => m.lifeStage === "adult" || m.lifeStage === "elder");
-      const leader = adults.sort((a, b) => b.ageDays * (0.5 + b.skills.social) - a.ageDays * (0.5 + a.skills.social))[0];
+      const prevLeaderId = s.leaderId;
+      let leader: Character | undefined;
+      let bestSway = -1;
+      for (const m of adults) {
+        const sway = this.standing(m) * (0.6 + m.skills.social) * (m.id === s.leaderId ? 1.15 : 1);
+        if (sway > bestSway) {
+          bestSway = sway;
+          leader = m;
+        }
+      }
       s.leaderId = leader?.id;
+      // A peaceful transfer of authority is a moment worth recording — but only
+      // once the settlement is established, and not the very first appointment.
+      if (leader && prevLeaderId && prevLeaderId !== leader.id && members.length >= 5) {
+        const prev = this.byId.get(prevLeaderId);
+        if (prev && prev.alive) {
+          this.log("social", `${leader.name} rose to lead ${s.name}, succeeding ${prev.name}.`, [leader.id]);
+        } else if (!prev || !prev.alive) {
+          this.log("social", `${leader.name} took up the mantle of leadership in ${s.name}.`, [leader.id]);
+        }
+      }
       const avg = (f: (m: Character) => number) => members.reduce((sum, m) => sum + f(m), 0) / members.length;
       s.culture.cooperation = Math.max(0, Math.min(1, s.culture.cooperation * 0.99 + (avg((m) => m.personality.sociability) + members.length / 40) * 0.01));
       s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression * 0.99 + avg((m) => m.personality.aggression) * 0.01));
@@ -1313,6 +1700,7 @@ export class SimulationEngine {
       this.updateEnvironment();
       this.updateResources();
       this.buildSpatial();
+      this.rebuildIndexes();
 
       const snapshot = this.state.characters.filter((c) => c.alive);
       this.popNow = snapshot.length;
@@ -1353,8 +1741,10 @@ export class SimulationEngine {
 
       this.updateSettlements();
       this.updateBeliefs();
+      this.updateRealms();
       this.updatePlagues();
       this.interSettlement();
+      this.updateRoutes();
       if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
       this.advanceResearch();
       this.pushMetrics();

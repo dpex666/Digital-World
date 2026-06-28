@@ -36,6 +36,40 @@ function appearanceShade(c: Character, dl: number): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
 }
 
+type Appearance = Character["appearance"];
+function appearanceColorA(a: Appearance): string {
+  return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(45 + a.luminance * 35)}%)`;
+}
+
+// The mean genome of a set of beings. Hue is averaged as a circular quantity
+// (unit-vector mean) so colour lineages average correctly across the wheel;
+// the rest are plain means. This is how we read the species' look at a moment
+// in its evolution — a pure summary of the inherited, mutated, selected genes.
+function meanAppearance(list: Character[]): Appearance {
+  let sx = 0;
+  let sy = 0;
+  let sat = 0;
+  let lum = 0;
+  let form = 0;
+  let size = 0;
+  let pattern = 0;
+  for (const c of list) {
+    const a = c.appearance;
+    const r = (a.hue * Math.PI) / 180;
+    sx += Math.cos(r);
+    sy += Math.sin(r);
+    sat += a.saturation;
+    lum += a.luminance;
+    form += a.form;
+    size += a.size;
+    pattern += a.pattern;
+  }
+  const n = Math.max(1, list.length);
+  let hue = (Math.atan2(sy / n, sx / n) * 180) / Math.PI;
+  hue = ((hue % 360) + 360) % 360;
+  return { hue, saturation: sat / n, luminance: lum / n, form: form / n, size: size / n, pattern: pattern / n };
+}
+
 // Pixel-art buildings, drawn from a few crisp rects. Their type tells the
 // civilisation's story: huts to live in, stores, tilled fields, workshops.
 function drawStructure(ctx: CanvasRenderingContext2D, px: number, py: number, type: string, ppt: number): void {
@@ -269,12 +303,41 @@ function creatureTemplate(form: number): string[] {
   return form < 0.34 ? CREATURE_STOUT : form < 0.67 ? CREATURE_STANDARD : CREATURE_TALL;
 }
 
-function topActions(strategy: Record<Action, number>): string {
-  return (Object.entries(strategy) as [Action, number][])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([k, v]) => `${k} ${v.toFixed(1)}`)
-    .join(", ");
+// The being's emergent place in society, derived (not assigned): a faith's
+// founding prophet, a settlement's leader, or a private life.
+function emergentRole(c: Character, sim: SimulationState): string | undefined {
+  const faith = sim.beliefs.find((b) => b.founderId === c.id && sim.settlements.some((s) => s.beliefId === b.id));
+  if (faith) return `prophet of ${faith.name}`;
+  const led = sim.settlements.find((s) => s.leaderId === c.id);
+  if (led) return `leads ${led.name}`;
+  return undefined;
+}
+
+const ACTION_HUES: Record<Action, number> = { forage: 95, cultivate: 130, hunt: 10, build: 38, craft: 270 };
+
+// The learned action-propensities themselves, drawn as bars — this is the
+// self-learning made visible: weights reinforced by lived outcomes, not rules.
+function StrategyBars({ strategy }: { strategy: Record<Action, number> }): JSX.Element {
+  const entries = Object.entries(strategy) as [Action, number][];
+  const max = Math.max(0.001, ...entries.map(([, v]) => v));
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: "#8a8f98", marginBottom: 3 }}>Learned strategy — reinforced by what paid off</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {entries
+          .sort((a, b) => b[1] - a[1])
+          .map(([action, v]) => (
+            <div key={action} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+              <span style={{ width: 54, flex: "0 0 auto", color: "#aeb3bd" }}>{action}</span>
+              <div style={{ flex: 1, height: 8, background: "#0c0e15", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${(Math.max(0, v) / max) * 100}%`, height: "100%", background: `hsl(${ACTION_HUES[action]},60%,55%)`, borderRadius: 4 }} />
+              </div>
+              <span style={{ width: 28, flex: "0 0 auto", textAlign: "right", color: "#778" }}>{v.toFixed(1)}</span>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
 }
 
 export function App(): JSX.Element {
@@ -285,6 +348,7 @@ export function App(): JSX.Element {
   const [selectedSettlementId, setSelectedSettlementId] = useState<string | null>(null);
   const [caughtUp, setCaughtUp] = useState(caughtUpTicks);
   const [zoom, setZoom] = useState(1);
+  const [tab, setTab] = useState<"world" | "lives" | "story">("world");
   const saveCounter = useRef(0);
   const latest = useRef(sim);
   latest.current = sim;
@@ -325,18 +389,16 @@ export function App(): JSX.Element {
   const lexicon = Object.entries(sim.language.lexicon);
 
   return (
-    <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 14, color: "#e8e8ea", background: "#0b0c10", minHeight: "100vh" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>Digital World</h1>
-        <span style={{ color: "#8a8f98", fontSize: 13 }}>
-          An autonomous civilisation that begins as two and grows, learns, and invents on its own. You are watching — not playing.
-        </span>
+    <div className="dw-app">
+      <div className="dw-header">
+        <h1 className="dw-title">Digital World</h1>
+        <span className="dw-sub">An autonomous civilisation that begins as two and grows, learns, invents, believes, and wars — on its own. You are watching, not playing.</span>
       </div>
 
       {caughtUp > 0 ? (
         <div
           onClick={() => setCaughtUp(0)}
-          style={{ marginTop: 8, padding: "6px 10px", background: "#1a2230", border: "1px solid #2c3a52", borderRadius: 6, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
+          style={{ marginTop: 10, padding: "7px 11px", background: "#15202f", border: "1px solid #2c3a52", borderRadius: 9, fontSize: 12.5, color: "#bcd", cursor: "pointer" }}
           title="dismiss"
         >
           ⏳ The world kept living while you were away — it advanced <b>{caughtUp}</b> {caughtUp === 1 ? "day" : "days"}
@@ -344,144 +406,210 @@ export function App(): JSX.Element {
         </div>
       ) : null}
 
-      <p style={{ color: "#aab", fontSize: 13, marginTop: 8 }}>
-        Year <b>{m?.year ?? 0}</b> · Tick {sim.tick} · {sim.environment.season} · Climate <b>{sim.environment.climateEpoch}</b> (warmth{" "}
-        {sim.environment.warmth.toFixed(2)}) · Age: <b style={{ color: "#d8c46a" }}>{sim.epoch.name}</b> (epoch {sim.epoch.index}) · Population{" "}
-        <b>{m?.population ?? 0}</b> · Generation {m?.maxGeneration ?? 0}
-      </p>
+      <div className="statbar">
+        <StatChip k="Year" v={String(m?.year ?? 0)} />
+        <StatChip k="Age" v={sim.epoch.name} accent />
+        <StatChip k="Climate" v={`${sim.environment.climateEpoch} ${sim.environment.warmth.toFixed(2)}`} />
+        <StatChip k="Season" v={sim.environment.season} />
+        <StatChip k="Population" v={String(m?.population ?? 0)} />
+        <StatChip k="Generation" v={String(m?.maxGeneration ?? 0)} />
+        <StatChip k="Realms" v={String(sim.realms.length)} />
+        <StatChip k="Faiths" v={String(sim.beliefs.filter((b) => sim.settlements.some((s) => s.beliefId === b.id)).length)} />
+      </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
-        <span style={{ color: "#777", fontSize: 12 }}>speed</span>
+      <div className="controls">
+        <button className="primary" onClick={() => setObserving((s) => !s)}>{observing ? "❚❚ Hold" : "▶ Observe"}</button>
+        <span className="label">speed</span>
         {SPEEDS.map((s) => (
-          <button key={s} onClick={() => setSpeed(s)} style={{ fontWeight: speed === s ? 700 : 400, opacity: speed === s ? 1 : 0.6 }}>
+          <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>
             {s}×
           </button>
         ))}
-        <span style={{ color: "#777", fontSize: 12, marginLeft: 6 }}>zoom</span>
+        <span className="label">zoom</span>
         <button onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.5).toFixed(1)))}>−</button>
         <button onClick={() => setZoom((z) => Math.min(6, +(z + 0.5).toFixed(1)))}>+</button>
-        <span style={{ color: "#555", fontSize: 12 }}>{zoom.toFixed(1)}×</span>
-        <span style={{ color: "#555", fontSize: 12, marginLeft: 6 }}>the view follows the living — they glow; click one to follow its life</span>
+        <span style={{ color: "var(--faint)", fontSize: 12 }}>{zoom.toFixed(1)}×</span>
       </div>
 
       <div className="dw-layout">
         <div style={{ minWidth: 0 }}>
-          <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} speed={speed} />
+          <div className="map-frame">
+            <MapView sim={sim} selectedCharId={selectedCharId} onSelect={setSelectedCharId} zoom={zoom} speed={speed} />
+          </div>
 
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#8a8f98" }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "var(--muted)" }}>
             <Swatch c="rgb(46,92,134)" label="water" />
             <Swatch c="rgb(120,116,126)" label="mountain" />
             <Swatch c="rgb(196,176,116)" label="desert" />
             <Swatch c="rgb(52,102,60)" label="forest" />
             <Swatch c="rgb(98,126,78)" label="plains" />
-            <span style={{ marginLeft: 6 }}>beings are little creatures coloured by their evolving genome · ⌂ structures · ◯ settlements</span>
+            <span style={{ marginLeft: 4, color: "var(--faint)" }}>◇ faith shrine · coloured land = realm territory · the view follows the living</span>
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          <div className="metric-grid">
             <Metric label="Population" value={m?.population ?? 0} />
-            <Metric label="Births (yr-tick)" value={m?.births ?? 0} />
-            <Metric label="Deaths (yr-tick)" value={m?.deaths ?? 0} />
-            <Metric label="Avg age (yrs)" value={m?.avgAgeYears ?? 0} />
+            <Metric label="Births / tick" value={m?.births ?? 0} />
+            <Metric label="Deaths / tick" value={m?.deaths ?? 0} />
+            <Metric label="Avg age" value={m?.avgAgeYears ?? 0} />
             <Metric label="Households" value={m?.households ?? 0} />
             <Metric label="Settlements" value={m?.settlements ?? 0} />
             <Metric label="Inventions" value={m?.techCount ?? 0} />
             <Metric label="Avg intellect" value={m?.avgIntelligence ?? 0} />
           </div>
 
-          <PopGraph sim={sim} />
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3>Population over time</h3>
+            <PopGraph sim={sim} />
+          </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
-          </Panel>
+        <div style={{ minWidth: 0 }}>
+          <div className="tabs">
+            <div className={`tab ${tab === "world" ? "active" : ""}`} onClick={() => setTab("world")}>World</div>
+            <div className={`tab ${tab === "lives" ? "active" : ""}`} onClick={() => setTab("lives")}>Lives</div>
+            <div className={`tab ${tab === "story" ? "active" : ""}`} onClick={() => setTab("story")}>Story</div>
+          </div>
 
-          <Panel title="Notable Lives">
-            <NotableLives sim={sim} onSelect={setSelectedCharId} />
-          </Panel>
+          {tab === "lives" ? (
+            <>
+              <Panel title="Inhabitant">
+                {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+              </Panel>
+              <Panel title="Notable Lives">
+                <NotableLives sim={sim} onSelect={setSelectedCharId} />
+              </Panel>
+              <Panel title="Evolution of the Species">
+                <SpeciesEvolution sim={sim} />
+              </Panel>
+            </>
+          ) : null}
 
-          <Panel title="Faiths">
-            <Faiths sim={sim} />
-          </Panel>
-
-          <Panel title="Civilisation">
-            <Row k="Age (epoch)" v={`${sim.epoch.name} · #${sim.epoch.index}`} />
-            <Row k="Knowledge" v={sim.knowledge.toFixed(0)} />
-            <Row k="Inventions" v={String(sim.techniques.length)} />
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 6 }}>Their inventions (named in their own tongue):</div>
-            <div style={{ fontSize: 12, maxHeight: 90, overflow: "auto" }}>
-              {sim.techniques.length === 0 ? (
-                <Muted>No inventions yet — they are still learning to survive.</Muted>
-              ) : (
-                sim.techniques
-                  .slice(-8)
-                  .reverse()
-                  .map((t) => (
-                    <div key={t.id}>
-                      <b style={{ color: "#cdb6f0" }}>{t.name}</b> <span style={{ color: "#667" }}>· tier {t.tier}</span>
-                    </div>
-                  ))
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their world's elements:</div>
-            <div style={{ fontSize: 12 }}>
-              {(Object.values(sim.elements)).map((el) => (
-                <span key={el.name} style={{ marginRight: 8, color: `hsl(${el.hue},60%,70%)` }}>
-                  {el.name} <span style={{ color: "#667" }}>({el.role})</span>
-                </span>
-              ))}
-            </div>
-            <div style={{ fontSize: 12, color: "#9aa", marginTop: 8 }}>Their language ({lexicon.length} words coined):</div>
-            <div style={{ fontSize: 12, color: "#bcd" }}>
-              {lexicon.slice(-10).map(([, w]) => w).join(" · ") || <Muted>—</Muted>}
-            </div>
-          </Panel>
-
-          <Panel title="The Epic">
-            <div style={{ maxHeight: 220, overflow: "auto", fontSize: 12 }}>
-              {sim.epic.length === 0 ? (
-                <Muted>The story has not yet begun.</Muted>
-              ) : (
-                sim.epic
-                  .slice()
-                  .reverse()
-                  .map((e, i) => (
-                    <div key={i} style={{ marginBottom: 3, color: epicColor(e.kind) }}>
-                      <span style={{ color: "#667" }}>Yr {e.year}</span> · {e.message}
-                    </div>
-                  ))
-              )}
-            </div>
-          </Panel>
-
-          <Panel title="Settlement">
-            <select
-              value={selectedSettlementId ?? ""}
-              onChange={(e) => setSelectedSettlementId(e.target.value || null)}
-              style={{ width: "100%", marginBottom: 6 }}
-            >
-              <option value="">— select a settlement —</option>
-              {sim.settlements.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.memberIds.length})
-                </option>
-              ))}
-            </select>
-            {selectedSettlement ? <SettlementView s={selectedSettlement} sim={sim} /> : <Muted>None selected.</Muted>}
-          </Panel>
-
-          <Panel title="Chronicle">
-            <div style={{ maxHeight: 260, overflow: "auto", fontSize: 12 }}>
-              {recent.map((e) => (
-                <div key={e.id} style={{ color: chronicleColor(e.category), marginBottom: 2 }}>
-                  <span style={{ color: "#556" }}>[{e.tick}]</span> {e.message}
+          {tab === "world" ? (
+            <>
+              <Panel title="Realms & Peoples">
+                <Realms sim={sim} onSelectSettlement={setSelectedSettlementId} />
+              </Panel>
+              <Panel title="Faiths">
+                <Faiths sim={sim} />
+              </Panel>
+              <Panel title="Civilisation">
+                <Row k="Age (epoch)" v={`${sim.epoch.name} · #${sim.epoch.index}`} />
+                <Row k="Knowledge" v={sim.knowledge.toFixed(0)} />
+                <Row k="Inventions" v={String(sim.techniques.length)} />
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>Inventions (in their own tongue)</div>
+                <div className="scroll" style={{ fontSize: 12, maxHeight: 86 }}>
+                  {sim.techniques.length === 0 ? (
+                    <Muted>No inventions yet — they are still learning to survive.</Muted>
+                  ) : (
+                    sim.techniques.slice(-8).reverse().map((t) => (
+                      <div key={t.id}>
+                        <b style={{ color: "var(--violet)" }}>{t.name}</b> <span style={{ color: "var(--faint)" }}>· tier {t.tier}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))}
-            </div>
-          </Panel>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>World elements</div>
+                <div style={{ fontSize: 12 }}>
+                  {Object.values(sim.elements).map((el) => (
+                    <span key={el.name} style={{ marginRight: 8, color: `hsl(${el.hue},60%,70%)` }}>
+                      {el.name} <span style={{ color: "var(--faint)" }}>({el.role})</span>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>Language ({lexicon.length} words)</div>
+                <div style={{ fontSize: 12, color: "#bcd" }}>{lexicon.slice(-10).map(([, w]) => w).join(" · ") || <Muted>—</Muted>}</div>
+              </Panel>
+              <Panel title="Settlement Inspector">
+                <select value={selectedSettlementId ?? ""} onChange={(e) => setSelectedSettlementId(e.target.value || null)} style={{ marginBottom: 8 }}>
+                  <option value="">— select a settlement —</option>
+                  {sim.settlements.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.memberIds.length})
+                    </option>
+                  ))}
+                </select>
+                {selectedSettlement ? <SettlementView s={selectedSettlement} sim={sim} /> : <Muted>None selected.</Muted>}
+              </Panel>
+            </>
+          ) : null}
+
+          {tab === "story" ? (
+            <>
+              <Panel title="The Epic">
+                <div className="scroll" style={{ maxHeight: 280, fontSize: 12 }}>
+                  {sim.epic.length === 0 ? (
+                    <Muted>The story has not yet begun.</Muted>
+                  ) : (
+                    sim.epic.slice().reverse().map((e, i) => (
+                      <div key={i} style={{ marginBottom: 4, color: epicColor(e.kind) }}>
+                        <span style={{ color: "var(--faint)" }}>Yr {e.year}</span> · {e.message}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Panel>
+              <Panel title="Chronicle">
+                <div className="scroll" style={{ maxHeight: 320, fontSize: 12 }}>
+                  {recent.map((e) => (
+                    <div key={e.id} style={{ color: chronicleColor(e.category), marginBottom: 2 }}>
+                      <span style={{ color: "var(--faint)" }}>[{e.tick}]</span> {e.message}
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            </>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatChip({ k, v, accent }: { k: string; v: string; accent?: boolean }): JSX.Element {
+  return (
+    <div className="statchip">
+      <span className="k">{k}</span>
+      <span className="v" style={accent ? { color: "var(--gold)" } : undefined}>
+        {v}
+      </span>
+    </div>
+  );
+}
+
+// The world's peoples / nations and the settlements that make them up.
+function Realms({ sim, onSelectSettlement }: { sim: SimulationState; onSelectSettlement: (id: string) => void }): JSX.Element {
+  if (!sim.realms.length) return <Muted>No realms yet.</Muted>;
+  const pop = (r: SimulationState["realms"][number]): number =>
+    r.settlementIds.reduce((t, id) => t + (sim.settlements.find((s) => s.id === id)?.memberIds.length ?? 0), 0);
+  const faithName = (id?: string): string => sim.beliefs.find((b) => b.id === id)?.name ?? "no faith";
+  return (
+    <div>
+      {sim.realms
+        .slice()
+        .sort((a, b) => pop(b) - pop(a))
+        .map((r) => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--border-soft)" }}>
+            <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${r.hue},55%,55%)`, boxShadow: `0 0 6px hsl(${r.hue},55%,55%)` }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5 }}>
+                <b>{r.name}</b>
+                {r.settlementIds.length >= 4 ? <span style={{ color: "#f0d674" }}> ⚔ empire</span> : null}{" "}
+                <span style={{ color: "var(--faint)" }}>· {pop(r)} people · {r.settlementIds.length === 1 ? "city-state" : `${r.settlementIds.length} settlements`}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {faithName(r.beliefId)} ·{" "}
+                {r.settlementIds
+                  .map((id) => sim.settlements.find((s) => s.id === id))
+                  .filter(Boolean)
+                  .map((s) => (
+                    <span key={s!.id} onClick={() => onSelectSettlement(s!.id)} style={{ cursor: "pointer", color: "var(--accent)", marginRight: 5 }}>
+                      {s!.name}
+                    </span>
+                  ))}
+              </div>
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
@@ -607,12 +735,11 @@ function MapView({
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
     const detailed = ppt >= 6;
     // Territory: each settlement projects influence over nearby land, coloured
-    // by its faith (neutral grey if faithless), so the map shows the domains of
-    // religions and the reach of civilisations.
-    const terr = sim.settlements.map((s) => {
-      const faith = s.beliefId ? sim.beliefs.find((b) => b.id === s.beliefId) : undefined;
-      return { x: s.center.x, y: s.center.y, hue: faith ? faith.hue : -1 };
-    });
+    // by its realm (nation), so the map shows the reach of peoples — distinct
+    // realms read as distinct colours even when they share a faith.
+    const realmHue = new Map<string, number>();
+    for (const rl of sim.realms) for (const sid of rl.settlementIds) realmHue.set(sid, rl.hue);
+    const terr = sim.settlements.map((s) => ({ x: s.center.x, y: s.center.y, hue: realmHue.get(s.id) ?? -1 }));
     const TERR_R = 7;
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
@@ -667,10 +794,44 @@ function MapView({
       drawStructure(ctx, px, py, s.type, ppt);
     }
 
-    // Settlements — rings + names.
+    // Trade roads: persistent paths worn between settlements that trade often.
+    // Drawn beneath the settlements so towns sit atop their road network. Their
+    // brightness and width grow with the road's reinforced strength.
+    if (sim.routes && sim.routes.length) {
+      const centerOf = new Map(sim.settlements.map((s) => [s.id, s.center] as const));
+      for (const route of sim.routes) {
+        const ca = centerOf.get(route.a);
+        const cb = centerOf.get(route.b);
+        if (!ca || !cb) continue;
+        const op = Math.min(0.5, 0.12 + route.strength * 0.5);
+        ctx.strokeStyle = `rgba(214,196,140,${op.toFixed(3)})`;
+        ctx.lineWidth = 0.8 + route.strength * 2.6;
+        ctx.beginPath();
+        ctx.moveTo(offX + (ca.x + 0.5) * ppt, offY + (ca.y + 0.5) * ppt);
+        ctx.lineTo(offX + (cb.x + 0.5) * ppt, offY + (cb.y + 0.5) * ppt);
+        ctx.stroke();
+      }
+    }
+
+    // Settlements — rings + names. Capitals (a realm's largest settlement) get a star.
+    const capitals = new Set(sim.realms.map((r) => r.capitalId).filter((x): x is string => !!x));
     for (const st of sim.settlements) {
       const px = offX + (st.center.x + 0.5) * ppt;
       const py = offY + (st.center.y + 0.5) * ppt;
+      // A settlement reads at the scale of its population: a thriving capital
+      // shows as a broad town, a frontier hamlet as a dot. Radius grows with the
+      // log of headcount so the map communicates where the people actually are.
+      const pop = st.memberIds.length;
+      const ringR = ppt * (1.4 + Math.min(2.8, Math.log2(1 + pop) * 0.55));
+      // Footprint: a faint disc in the realm's colour shows the settlement's
+      // claimed ground swelling with its size.
+      const rhue = realmHue.get(st.id);
+      if (rhue !== undefined) {
+        ctx.fillStyle = `hsla(${Math.round(rhue)},45%,55%,0.10)`;
+        ctx.beginPath();
+        ctx.arc(px, py, ringR, 0, Math.PI * 2);
+        ctx.fill();
+      }
       // Ring colour reflects the village's temperament: gold when peaceable,
       // red when warlike.
       const hostile = st.culture.aggression;
@@ -678,22 +839,23 @@ function MapView({
       const gg = Math.round(196 - hostile * 130);
       const bb = Math.round(106 - hostile * 60);
       ctx.strokeStyle = `rgba(${rr},${gg},${bb},0.7)`;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = pop >= 12 ? 2.2 : 1.5;
       ctx.beginPath();
-      ctx.arc(px, py, ppt * 2, 0, Math.PI * 2);
+      ctx.arc(px, py, ringR, 0, Math.PI * 2);
       ctx.stroke();
       if (ppt > 9) {
-        ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
-        ctx.font = "11px system-ui, sans-serif";
+        const isCap = capitals.has(st.id);
+        ctx.fillStyle = isCap ? "#f0d674" : `rgb(${rr},${gg},${bb})`;
+        ctx.font = `${isCap ? "bold " : ""}11px system-ui, sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillText(st.name, px, py - ppt * 2.1);
+        ctx.fillText(`${isCap ? "★ " : ""}${st.name}`, px, py - ringR - ppt * 0.18);
       }
       // Plague: a sickly green pall ring marks a settlement gripped by epidemic.
       if ((st.plague ?? 0) > 0) {
         ctx.strokeStyle = `rgba(150,180,60,${(0.4 + (st.plague ?? 0) * 0.4).toFixed(3)})`;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(px, py, ppt * 1.5, 0, Math.PI * 2);
+        ctx.arc(px, py, ringR * 0.74, 0, Math.PI * 2);
         ctx.stroke();
       }
       // Faith shrine: a small diamond in the belief's colour marks a devout village.
@@ -701,16 +863,32 @@ function MapView({
         const faith = sim.beliefs.find((b) => b.id === st.beliefId);
         if (faith) {
           const sz = Math.max(2.5, ppt * 0.5);
+          const sy = py - ringR + ppt * 0.45;
           ctx.fillStyle = `hsl(${faith.hue},70%,${Math.round(45 + st.devotion * 20)}%)`;
           ctx.beginPath();
-          ctx.moveTo(px, py - ppt * 1.55 - sz);
-          ctx.lineTo(px + sz, py - ppt * 1.55);
-          ctx.lineTo(px, py - ppt * 1.55 + sz);
-          ctx.lineTo(px - sz, py - ppt * 1.55);
+          ctx.moveTo(px, sy - sz);
+          ctx.lineTo(px + sz, sy);
+          ctx.lineTo(px, sy + sz);
+          ctx.lineTo(px - sz, sy);
           ctx.closePath();
           ctx.fill();
         }
       }
+    }
+
+    // Realm names: a faint label over the heart of each multi-settlement nation.
+    for (const rl of sim.realms) {
+      if (rl.settlementIds.length < 2) continue;
+      const cs = rl.settlementIds.map((id) => sim.settlements.find((s) => s.id === id)).filter(Boolean) as typeof sim.settlements;
+      if (cs.length < 2) continue;
+      const cx = cs.reduce((t, s) => t + s.center.x, 0) / cs.length;
+      const cy = cs.reduce((t, s) => t + s.center.y, 0) / cs.length;
+      const px = offX + (cx + 0.5) * ppt;
+      const py = offY + (cy + 0.5) * ppt;
+      ctx.fillStyle = `hsla(${Math.round(rl.hue)},45%,72%,0.55)`;
+      ctx.font = `${Math.max(11, Math.min(20, ppt * 0.9)).toFixed(0)}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText(rl.name.toUpperCase(), px, py + ppt * 0.3);
     }
 
     // Transient links between settlements: teal caravans for trade, red flashes
@@ -772,6 +950,27 @@ function MapView({
       const r = Math.max(2.5, ppt * 0.26 * (0.75 + c.appearance.size) * stageScale);
       drawCreature(ctx, px, py, r, c, c.id === selectedCharId);
     }
+
+    // Atmosphere, drawn last over everything: a passing storm briefly darkens
+    // the sky, and a soft vignette gives the flat tile-world depth and draws the
+    // eye to the living heart of the map.
+    const storm = sim.environment.weather.storm;
+    if (storm > 0.01) {
+      ctx.fillStyle = `rgba(26,32,50,${(storm * 0.16).toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+    const vg = ctx.createRadialGradient(
+      cssW / 2,
+      cssH * 0.46,
+      Math.min(cssW, cssH) * 0.34,
+      cssW / 2,
+      cssH / 2,
+      Math.max(cssW, cssH) * 0.66,
+    );
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(3,5,11,0.45)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, cssW, cssH);
   }, [sim, selectedCharId, zoom, speed]);
 
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>): void => {
@@ -800,7 +999,7 @@ function MapView({
 
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
-      <canvas ref={canvasRef} onClick={onClick} style={{ width: "100%", borderRadius: 8, border: "1px solid #23252c", cursor: "pointer", display: "block" }} />
+      <canvas ref={canvasRef} onClick={onClick} style={{ width: "100%", cursor: "pointer", display: "block" }} />
     </div>
   );
 }
@@ -832,21 +1031,102 @@ function Faiths({ sim }: { sim: SimulationState }): JSX.Element {
     if (t.aggression < -0.3) traits.push("pacifist");
     return traits.length ? traits.join(", ") : "quiet";
   };
+  const prophetName = (id?: string): string | undefined => (id ? sim.characters.find((c) => c.id === id)?.name : undefined);
   return (
     <div>
       {living
         .sort((a, b) => (followers.get(b.id) ?? 0) - (followers.get(a.id) ?? 0))
-        .map((b) => (
-          <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12.5 }}>
-            <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${b.hue},65%,60%)`, boxShadow: `0 0 6px hsl(${b.hue},65%,60%)` }} />
-            <div>
+        .map((b) => {
+          const prophet = prophetName(b.founderId);
+          return (
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12.5 }}>
+              <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${b.hue},65%,60%)`, boxShadow: `0 0 6px hsl(${b.hue},65%,60%)` }} />
               <div>
-                <b>{b.name}</b> <span style={{ color: "#778" }}>· {followers.get(b.id)} faithful</span>
+                <div>
+                  <b>{b.name}</b> <span style={{ color: "#778" }}>· {followers.get(b.id)} faithful</span>
+                </div>
+                <div style={{ color: "#8a8f98", fontSize: 11 }}>
+                  {tenetWord(b)}
+                  {prophet ? <span style={{ color: "#778" }}> · prophet {prophet}</span> : null}
+                </div>
               </div>
-              <div style={{ color: "#8a8f98", fontSize: 11 }}>{tenetWord(b)}</div>
             </div>
-          </div>
-        ))}
+          );
+        })}
+    </div>
+  );
+}
+
+// One being's body, drawn from its appearance genome as a small genome-swatch:
+// colour from hue/saturation/luminance, shape from the form gene, size from the
+// size gene, a marking when the pattern gene is expressed.
+function GenomeSwatch({ a, label, title }: { a: Appearance; label?: string; title?: string }): JSX.Element {
+  const dim = Math.round(15 + a.size * 20);
+  const radius = a.form > 0.67 ? "50%" : a.form > 0.34 ? "34%" : "5px";
+  return (
+    <div style={{ flex: "0 0 auto", textAlign: "center" }}>
+      <div
+        title={title}
+        style={{
+          width: dim,
+          height: dim,
+          margin: "0 auto",
+          borderRadius: radius,
+          background: appearanceColorA(a),
+          border: `1px solid ${appearanceColorA({ ...a, luminance: Math.max(0, a.luminance - 0.4) })}`,
+          boxShadow: `0 0 7px ${appearanceColorA(a)}`,
+          position: "relative",
+        }}
+      >
+        {a.pattern > 0.5 ? (
+          <span style={{ position: "absolute", left: "50%", top: "50%", width: Math.max(2, dim * 0.24), height: Math.max(2, dim * 0.24), transform: "translate(-50%,-50%)", borderRadius: "50%", background: appearanceColorA({ ...a, luminance: Math.min(1, a.luminance + 0.5) }) }} />
+        ) : null}
+      </div>
+      {label ? <div style={{ fontSize: 9.5, color: "var(--faint)", marginTop: 2 }}>{label}</div> : null}
+    </div>
+  );
+}
+
+// The species evolving its own look: from a single founding pair, the inherited
+// /mutated/selected appearance genome radiates into a spread of distinct bodies.
+// We show the founders, then a sample of today's living forms drawn across the
+// range of looks now present — so you can see how far the line has diversified.
+// Nothing here is designed; it is genes mutating down the generations.
+function SpeciesEvolution({ sim }: { sim: SimulationState }): JSX.Element {
+  const alive = sim.characters.filter((c) => c.alive);
+  if (alive.length < 4) return <Muted>The species is too young to show its evolution yet.</Muted>;
+  const founders = sim.characters.filter((c) => c.lineage.generation === 0).slice(0, 2);
+  const maxGen = alive.reduce((m, c) => Math.max(m, c.lineage.generation), 0);
+  // Sample today's population evenly across the spread of hues now present, so
+  // the row shows the breadth of the species' look rather than near-duplicates.
+  const sorted = alive.slice().sort((a, b) => a.appearance.hue - b.appearance.hue);
+  const take = Math.min(11, sorted.length);
+  const sample = Array.from({ length: take }, (_, i) => sorted[Math.floor((i * (sorted.length - 1)) / Math.max(1, take - 1))]);
+  const hues = alive.map((c) => c.appearance.hue);
+  let hueSpread = Math.max(...hues) - Math.min(...hues);
+  if (hueSpread > 180) hueSpread = 360 - hueSpread; // wrap-aware breadth
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {founders.length ? (
+          <>
+            <div style={{ display: "flex", gap: 5 }}>
+              {founders.map((c) => (
+                <GenomeSwatch key={c.id} a={c.appearance} title={`founder ${c.name}`} />
+              ))}
+            </div>
+            <span style={{ color: "var(--faint)", fontSize: 11 }}>founders →</span>
+          </>
+        ) : null}
+        <div style={{ display: "flex", gap: 5, overflowX: "auto", flex: 1 }}>
+          {sample.map((c) => (
+            <GenomeSwatch key={c.id} a={c.appearance} title={`${c.name} · gen ${c.lineage.generation} · hue ${Math.round(c.appearance.hue)}°`} />
+          ))}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+        From one founding pair, {maxGen} generations on, the living wear looks spanning {Math.round(hueSpread)}° of colour — shape, size and markings diverge too. Nothing here is designed; it is inherited genes mutating and being selected.
+      </div>
     </div>
   );
 }
@@ -902,6 +1182,7 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
   const partner = c.partnerId ? kin(c.partnerId) : undefined;
   const parents = c.lineage.parents.map(kin).filter((p): p is Character => !!p);
   const children = c.lineage.children.map(kin).filter((p): p is Character => !!p);
+  const role = emergentRole(c, sim);
 
   const KinChip = ({ p }: { p: Character }): JSX.Element => (
     <span
@@ -939,9 +1220,10 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
       <Row k="Stage / health" v={`${c.lifeStage} · ${c.health.toFixed(0)} hp`} />
       <Row k="Hunger / thirst" v={`${c.needs.hunger.toFixed(0)} / ${c.needs.thirst.toFixed(0)}`} />
       <Row k="Doing now" v={c.lastAction} />
-      <Row k="Learned leaning" v={topActions(c.strategy)} />
       <Row k="Intellect / educ." v={`${c.genetics.intelligence.toFixed(2)} / ${c.education.toFixed(2)}`} />
       <Row k="Settlement" v={settlement?.name ?? "—"} />
+      {role ? <Row k="Standing" v={role} /> : null}
+      <StrategyBars strategy={c.strategy} />
       <div style={{ color: "#8a8f98", marginTop: 4, fontStyle: "italic" }}>{c.lastDecisionReason}</div>
 
       <div style={{ borderTop: "1px solid #23252c", marginTop: 8, paddingTop: 6 }}>
@@ -965,6 +1247,17 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
   );
 }
 
+// A settlement's learned stance toward its neighbours (reinforcement-learned,
+// not assigned), shown so the viewer can see diplomacy being discovered.
+function dispositionLabel(s: Settlement): string {
+  const p = s.policy;
+  if (!p) return "—";
+  const acts: Array<"raid" | "trade" | "abstain"> = ["raid", "trade", "abstain"];
+  const top = acts.reduce((a, b) => (p[b] > p[a] ? b : a));
+  const word = top === "raid" ? "warlike" : top === "trade" ? "mercantile" : "insular";
+  return `${word} (war ${p.raid.toFixed(1)} · trade ${p.trade.toFixed(1)} · keep ${p.abstain.toFixed(1)})`;
+}
+
 function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JSX.Element {
   const leader = sim.characters.find((c) => c.id === s.leaderId);
   const faith = sim.beliefs.find((b) => b.id === s.beliefId);
@@ -976,6 +1269,7 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
       <Row k="Faith" v={faith ? `${faith.name} (devotion ${s.devotion.toFixed(2)})` : "none"} />
+      <Row k="Disposition (learned)" v={dispositionLabel(s)} />
       {(s.plague ?? 0) > 0 ? <Row k="Health" v={`⚠ plague (${(s.plague ?? 0).toFixed(2)})`} /> : null}
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
       <Row k="Aggression" v={s.culture.aggression.toFixed(2)} />
@@ -987,28 +1281,25 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
 }
 
 function PopGraph({ sim }: { sim: SimulationState }): JSX.Element {
-  const data = sim.metrics.slice(-160);
+  const data = sim.metrics.slice(-200);
   const max = Math.max(4, ...data.map((d) => d.population));
   return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 12, color: "#9aa", marginBottom: 4 }}>Population over time</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 60, width: "100%", overflow: "hidden", background: "#101218", padding: 4, border: "1px solid #23252c" }}>
-        {data.map((d, i) => (
-          <div
-            key={i}
-            title={`yr ${d.year}: ${d.population}`}
-            style={{ flex: "1 1 0", minWidth: 0, height: `${(d.population / max) * 100}%`, background: d.deaths > d.births ? "#9c5a5a" : "#4f8f6a" }}
-          />
-        ))}
-      </div>
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 64, width: "100%", overflow: "hidden", background: "#0c0e15", borderRadius: 7, padding: 5, border: "1px solid var(--border-soft)" }}>
+      {data.map((d, i) => (
+        <div
+          key={i}
+          title={`yr ${d.year}: ${d.population}`}
+          style={{ flex: "1 1 0", minWidth: 0, height: `${(d.population / max) * 100}%`, borderRadius: "2px 2px 0 0", background: d.deaths > d.births ? "#b06a6a" : "#5aa37c" }}
+        />
+      ))}
     </div>
   );
 }
 
 function Panel(props: { title: string; children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: 10, background: "#111319" }}>
-      <h3 style={{ margin: "0 0 8px", fontSize: 13, letterSpacing: 0.4, color: "#c7cad1", textTransform: "uppercase" }}>{props.title}</h3>
+    <div className="panel">
+      <h3>{props.title}</h3>
       {props.children}
     </div>
   );
@@ -1016,22 +1307,22 @@ function Panel(props: { title: string; children: React.ReactNode }): JSX.Element
 
 function Metric({ label, value }: { label: string; value: number }): JSX.Element {
   return (
-    <div style={{ border: "1px solid #23252c", borderRadius: 6, padding: "6px 10px", minWidth: 96, background: "#111319" }}>
-      <div style={{ fontSize: 11, color: "#8a8f98" }}>{label}</div>
-      <strong style={{ fontSize: 16 }}>{value}</strong>
+    <div className="metric">
+      <div className="k">{label}</div>
+      <div className="v">{value}</div>
     </div>
   );
 }
 
 function Row({ k, v }: { k: string; v: string }): JSX.Element {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5, padding: "1px 0" }}>
-      <span style={{ color: "#8a8f98" }}>{k}</span>
+    <div className="row">
+      <span className="k">{k}</span>
       <span style={{ textAlign: "right" }}>{v}</span>
     </div>
   );
 }
 
 function Muted({ children }: { children: React.ReactNode }): JSX.Element {
-  return <span style={{ color: "#667", fontSize: 12 }}>{children}</span>;
+  return <span className="muted">{children}</span>;
 }
