@@ -985,7 +985,11 @@ export class SimulationEngine {
     const raidFeas = Math.max(0.04, Math.min(2, force - 0.6)) * (sameFaith ? 0.35 : 1);
     const sPer = this.settlementFoodPer(s);
     const nPer = this.settlementFoodPer(n);
-    const tradeFeas = sPer > nPer ? Math.min(1.4, (sPer - nPer) / 3 + 0.2) : 0.15;
+    // An established road lowers the friction of trade, so partners already
+    // linked by commerce find it easier to trade again — infrastructure feeds
+    // back into the economy that built it.
+    const road = this.routeStrength(s.id, n.id);
+    const tradeFeas = (sPer > nPer ? Math.min(1.4, (sPer - nPer) / 3 + 0.2) : 0.15) * (1 + road * 0.8);
     const feas = { raid: raidFeas, trade: tradeFeas, abstain: 0.6 };
     const acts = ["raid", "trade", "abstain"] as const;
     const weights = acts.map((a) => Math.pow(Math.max(0.05, p[a]), 1.5) * feas[a]);
@@ -1051,6 +1055,11 @@ export class SimulationEngine {
     route.lastTick = this.state.tick;
   }
 
+  private routeStrength(s1: string, s2: string): number {
+    const [a, b] = s1 < s2 ? [s1, s2] : [s2, s1];
+    return this.state.routes.find((r) => r.a === a && r.b === b)?.strength ?? 0;
+  }
+
   // Roads fade when commerce lapses; once faint or once a settlement is gone,
   // the road is forgotten. Emergent infrastructure, sustained only by use.
   private updateRoutes(): void {
@@ -1069,7 +1078,10 @@ export class SimulationEngine {
     const bPer = this.settlementFoodPer(b);
     const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
     const gap = Math.abs(aPer - bPer);
-    const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length + 1);
+    // A well-worn road carries more goods: established logistics let a caravan
+    // move a larger share than a first, trackless journey between strangers.
+    const road = this.routeStrength(rich.id, poor.id);
+    const amount = this.moveFood(rich, poor, (gap * 0.4 * poor.memberIds.length + 1) * (1 + road * 0.6));
     if (amount <= 0.5) return;
     rich.knowledge = Math.min(8, rich.knowledge + 0.02);
     poor.knowledge = Math.min(8, poor.knowledge + 0.03);

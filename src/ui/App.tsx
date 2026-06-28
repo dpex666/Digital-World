@@ -1261,6 +1261,11 @@ function dispositionLabel(s: Settlement): string {
 function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JSX.Element {
   const leader = sim.characters.find((c) => c.id === s.leaderId);
   const faith = sim.beliefs.find((b) => b.id === s.beliefId);
+  const sName = (id: string): string => sim.settlements.find((x) => x.id === id)?.name ?? "?";
+  const roads = (sim.routes ?? [])
+    .filter((r) => r.a === s.id || r.b === s.id)
+    .sort((a, b) => b.strength - a.strength)
+    .map((r) => `${sName(r.a === s.id ? r.b : r.a)} (${Math.round(r.strength * 100)}%)`);
   return (
     <div style={{ fontSize: 13 }}>
       <Row k="People" v={String(s.memberIds.length)} />
@@ -1269,6 +1274,7 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
       <Row k="Faith" v={faith ? `${faith.name} (devotion ${s.devotion.toFixed(2)})` : "none"} />
+      <Row k="Trade roads" v={roads.length ? roads.join(", ") : "none"} />
       <Row k="Disposition (learned)" v={dispositionLabel(s)} />
       {(s.plague ?? 0) > 0 ? <Row k="Health" v={`⚠ plague (${(s.plague ?? 0).toFixed(2)})`} /> : null}
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
