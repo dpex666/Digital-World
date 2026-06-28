@@ -783,10 +783,15 @@ export class SimulationEngine {
     const tile = this.state.world.tiles[home.location.y][home.location.x];
     const local = (tile.resources.food ?? 0) + (home.storage.food ?? 0);
     if (local > 2.5 || this.hasStructure(home.id, "cultivation")) return;
-    if (this.rng.next() > 0.1) return;
+    // Learned wanderlust: the propensity to move on is reinforced when moving
+    // finds better land and decays when it doesn't, so lineages that benefit
+    // from roaming keep roaming and those that don't settle down.
+    if (home.migrateBias === undefined) home.migrateBias = 0.12;
+    if (this.rng.next() > home.migrateBias) return;
 
+    const hereScore = (tile.resources.food ?? 0) + tile.fertility * 4;
     let best: Vec2 | null = null;
-    let bestScore = (tile.resources.food ?? 0) + tile.fertility * 4;
+    let bestScore = hereScore;
     for (const d of NEIGHBORS) {
       const nx = home.location.x + d.x;
       const ny = home.location.y + d.y;
@@ -799,6 +804,11 @@ export class SimulationEngine {
         best = { x: nx, y: ny };
       }
     }
+    // Reinforce: a worthwhile move strengthens wanderlust; a wasted urge to move
+    // (no better land found) weakens it.
+    home.migrateBias = best
+      ? Math.min(0.6, home.migrateBias + 0.05 * Math.min(1, (bestScore - hereScore) / 4))
+      : Math.max(0.03, home.migrateBias - 0.03);
     if (best) {
       home.location = best;
       for (const id of home.memberIds) {
@@ -956,7 +966,11 @@ export class SimulationEngine {
     rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
     poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
     this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
-    if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.04 * rich.devotion) {
+    // Conversion flows from the devout and prospering to the doubting: the
+    // poorer partner's openness is the inverse of its own (fortune-driven)
+    // devotion, so the gods of the successful spread to those whose faith has
+    // faltered.
+    if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.06 * rich.devotion * (1 - poor.devotion)) {
       const faith = this.beliefById(rich.beliefId);
       poor.beliefId = rich.beliefId;
       poor.devotion = 0.25;
@@ -991,6 +1005,7 @@ export class SimulationEngine {
     }
     vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
     agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
+    vic.devotion = Math.max(0, vic.devotion - 0.04); // defeat shakes the loser's faith
     this.state.links.push({ from: { ...agg.center }, to: { ...vic.center }, kind: "raid", tick: this.state.tick });
     const verb = holy ? "waged holy war on" : "raided";
     this.log(
@@ -1098,7 +1113,19 @@ export class SimulationEngine {
           s.beliefId = undefined;
           continue;
         }
-        s.devotion = Math.min(1, s.devotion + 0.0015);
+        // Faith is adaptive to lived fortune: devotion deepens when the people
+        // prosper under it, and erodes through famine and plague — a crisis of
+        // faith. Belief is reinforced (or refuted) by outcomes, not assumed.
+        const fed = this.settlementFoodPer(s) > 3;
+        const plagued = (s.plague ?? 0) > 0;
+        s.devotion = Math.max(0, Math.min(1, s.devotion + (fed && !plagued ? 0.0015 : -0.0014)));
+        if (s.devotion <= 0.03) {
+          // The faith has failed them; the people abandon it.
+          this.log("belief", `${s.name} loses its faith in ${b.name}.`);
+          s.beliefId = undefined;
+          s.devotion = 0;
+          continue;
+        }
         const d = 0.012 * s.devotion;
         s.culture.cooperation = Math.max(0, Math.min(1, s.culture.cooperation + b.tenets.cooperation * d));
         s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression + b.tenets.aggression * d));

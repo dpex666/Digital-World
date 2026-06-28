@@ -144,6 +144,7 @@ export interface Household {
   toolLevel: number;
   settlementId?: ID;
   foundedTick: number;
+  migrateBias?: number; // learned propensity to move on, reinforced by whether moving improved their land
 }
 
 export interface Settlement {
