@@ -36,6 +36,40 @@ function appearanceShade(c: Character, dl: number): string {
   return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(l)}%)`;
 }
 
+type Appearance = Character["appearance"];
+function appearanceColorA(a: Appearance): string {
+  return `hsl(${Math.round(a.hue)}, ${Math.round(40 + a.saturation * 55)}%, ${Math.round(45 + a.luminance * 35)}%)`;
+}
+
+// The mean genome of a set of beings. Hue is averaged as a circular quantity
+// (unit-vector mean) so colour lineages average correctly across the wheel;
+// the rest are plain means. This is how we read the species' look at a moment
+// in its evolution — a pure summary of the inherited, mutated, selected genes.
+function meanAppearance(list: Character[]): Appearance {
+  let sx = 0;
+  let sy = 0;
+  let sat = 0;
+  let lum = 0;
+  let form = 0;
+  let size = 0;
+  let pattern = 0;
+  for (const c of list) {
+    const a = c.appearance;
+    const r = (a.hue * Math.PI) / 180;
+    sx += Math.cos(r);
+    sy += Math.sin(r);
+    sat += a.saturation;
+    lum += a.luminance;
+    form += a.form;
+    size += a.size;
+    pattern += a.pattern;
+  }
+  const n = Math.max(1, list.length);
+  let hue = (Math.atan2(sy / n, sx / n) * 180) / Math.PI;
+  hue = ((hue % 360) + 360) % 360;
+  return { hue, saturation: sat / n, luminance: lum / n, form: form / n, size: size / n, pattern: pattern / n };
+}
+
 // Pixel-art buildings, drawn from a few crisp rects. Their type tells the
 // civilisation's story: huts to live in, stores, tilled fields, workshops.
 function drawStructure(ctx: CanvasRenderingContext2D, px: number, py: number, type: string, ppt: number): void {
@@ -443,6 +477,9 @@ export function App(): JSX.Element {
               </Panel>
               <Panel title="Notable Lives">
                 <NotableLives sim={sim} onSelect={setSelectedCharId} />
+              </Panel>
+              <Panel title="Evolution of the Species">
+                <SpeciesEvolution sim={sim} />
               </Panel>
             </>
           ) : null}
@@ -961,6 +998,80 @@ function Faiths({ sim }: { sim: SimulationState }): JSX.Element {
             </div>
           );
         })}
+    </div>
+  );
+}
+
+// One being's body, drawn from its appearance genome as a small genome-swatch:
+// colour from hue/saturation/luminance, shape from the form gene, size from the
+// size gene, a marking when the pattern gene is expressed.
+function GenomeSwatch({ a, label, title }: { a: Appearance; label?: string; title?: string }): JSX.Element {
+  const dim = Math.round(15 + a.size * 20);
+  const radius = a.form > 0.67 ? "50%" : a.form > 0.34 ? "34%" : "5px";
+  return (
+    <div style={{ flex: "0 0 auto", textAlign: "center" }}>
+      <div
+        title={title}
+        style={{
+          width: dim,
+          height: dim,
+          margin: "0 auto",
+          borderRadius: radius,
+          background: appearanceColorA(a),
+          border: `1px solid ${appearanceColorA({ ...a, luminance: Math.max(0, a.luminance - 0.4) })}`,
+          boxShadow: `0 0 7px ${appearanceColorA(a)}`,
+          position: "relative",
+        }}
+      >
+        {a.pattern > 0.5 ? (
+          <span style={{ position: "absolute", left: "50%", top: "50%", width: Math.max(2, dim * 0.24), height: Math.max(2, dim * 0.24), transform: "translate(-50%,-50%)", borderRadius: "50%", background: appearanceColorA({ ...a, luminance: Math.min(1, a.luminance + 0.5) }) }} />
+        ) : null}
+      </div>
+      {label ? <div style={{ fontSize: 9.5, color: "var(--faint)", marginTop: 2 }}>{label}</div> : null}
+    </div>
+  );
+}
+
+// The species evolving its own look: from a single founding pair, the inherited
+// /mutated/selected appearance genome radiates into a spread of distinct bodies.
+// We show the founders, then a sample of today's living forms drawn across the
+// range of looks now present — so you can see how far the line has diversified.
+// Nothing here is designed; it is genes mutating down the generations.
+function SpeciesEvolution({ sim }: { sim: SimulationState }): JSX.Element {
+  const alive = sim.characters.filter((c) => c.alive);
+  if (alive.length < 4) return <Muted>The species is too young to show its evolution yet.</Muted>;
+  const founders = sim.characters.filter((c) => c.lineage.generation === 0).slice(0, 2);
+  const maxGen = alive.reduce((m, c) => Math.max(m, c.lineage.generation), 0);
+  // Sample today's population evenly across the spread of hues now present, so
+  // the row shows the breadth of the species' look rather than near-duplicates.
+  const sorted = alive.slice().sort((a, b) => a.appearance.hue - b.appearance.hue);
+  const take = Math.min(11, sorted.length);
+  const sample = Array.from({ length: take }, (_, i) => sorted[Math.floor((i * (sorted.length - 1)) / Math.max(1, take - 1))]);
+  const hues = alive.map((c) => c.appearance.hue);
+  let hueSpread = Math.max(...hues) - Math.min(...hues);
+  if (hueSpread > 180) hueSpread = 360 - hueSpread; // wrap-aware breadth
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {founders.length ? (
+          <>
+            <div style={{ display: "flex", gap: 5 }}>
+              {founders.map((c) => (
+                <GenomeSwatch key={c.id} a={c.appearance} title={`founder ${c.name}`} />
+              ))}
+            </div>
+            <span style={{ color: "var(--faint)", fontSize: 11 }}>founders →</span>
+          </>
+        ) : null}
+        <div style={{ display: "flex", gap: 5, overflowX: "auto", flex: 1 }}>
+          {sample.map((c) => (
+            <GenomeSwatch key={c.id} a={c.appearance} title={`${c.name} · gen ${c.lineage.generation} · hue ${Math.round(c.appearance.hue)}°`} />
+          ))}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+        From one founding pair, {maxGen} generations on, the living wear looks spanning {Math.round(hueSpread)}° of colour — shape, size and markings diverge too. Nothing here is designed; it is inherited genes mutating and being selected.
+      </div>
     </div>
   );
 }
