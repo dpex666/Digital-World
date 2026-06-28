@@ -1366,8 +1366,12 @@ export class SimulationEngine {
         }
       }
       if (nearestId) {
-        this.state.settlements.find((x) => x.id === nearestId)!.householdIds.push(h.id);
+        const host = this.state.settlements.find((x) => x.id === nearestId)!;
+        host.householdIds.push(h.id);
         h.settlementId = nearestId;
+        // A family living under a faith comes to carry it, so it travels with
+        // them if they later set out to found a colony of their own.
+        if (host.beliefId) h.beliefId = host.beliefId;
       } else {
         h.settlementId = undefined;
       }
@@ -1397,6 +1401,12 @@ export class SimulationEngine {
       const cx = Math.round(group.reduce((s, h) => s + h.location.x, 0) / group.length);
       const cy = Math.round(group.reduce((s, h) => s + h.location.y, 0) / group.length);
       const num = this.state.nextSettlementNum++;
+      // A colony inherits the faith its founding families carried with them (the
+      // most common one), so a people's religion spreads with its frontier and
+      // realms grow into multi-settlement nations rather than splintering.
+      const faithTally = new Map<string, number>();
+      for (const h of group) if (h.beliefId && this.beliefById(h.beliefId)) faithTally.set(h.beliefId, (faithTally.get(h.beliefId) ?? 0) + 1);
+      const carried = [...faithTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
       const settlement: Settlement = {
         id: `set-${num}`,
         name: makeWord(this.state.language, this.rng, 2, 3),
@@ -1407,7 +1417,8 @@ export class SimulationEngine {
         knowledge: 0.05,
         foundedTick: this.state.tick,
         populationPeak: 0,
-        devotion: 0,
+        beliefId: carried,
+        devotion: carried ? 0.35 : 0,
         plague: 0,
         policy: { raid: 1, trade: 1, abstain: 1.4 },
         lastMacroAction: "abstain",

@@ -145,6 +145,7 @@ export interface Household {
   settlementId?: ID;
   foundedTick: number;
   migrateBias?: number; // learned propensity to move on, reinforced by whether moving improved their land
+  beliefId?: ID; // the faith the family carries, so pioneers take their gods to new colonies
 }
 
 export interface Settlement {
