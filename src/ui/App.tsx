@@ -78,8 +78,9 @@ function drawCreature(ctx: CanvasRenderingContext2D, px: number, py: number, r: 
   const body = appearanceColor(c);
   const outline = appearanceShade(c, -30);
   const belly = c.appearance.pattern > 0.5 ? appearanceShade(c, 24) : appearanceShade(c, -16);
-  const cols = CREATURE[0].length;
-  const rows = CREATURE.length;
+  const template = creatureTemplate(c.appearance.form);
+  const cols = template[0].length;
+  const rows = template.length;
   // form gene stretches the creature taller or squatter
   const cs = Math.max(1, (r * 2.6) / rows);
   const spriteW = cols * cs;
@@ -98,7 +99,7 @@ function drawCreature(ctx: CanvasRenderingContext2D, px: number, py: number, r: 
 
   const cell = Math.ceil(cs) + 0.5;
   for (let ry = 0; ry < rows; ry += 1) {
-    const line = CREATURE[ry];
+    const line = template[ry];
     for (let cx = 0; cx < cols; cx += 1) {
       const ch = line[cx];
       if (ch === " ") continue;
@@ -225,8 +226,10 @@ function getTile(terrain: string, variant: number): HTMLCanvasElement {
   return c;
 }
 
-// 8x10 pixel-creature template. o=outline, b=body, e=eye, l=leg, p=belly mark.
-const CREATURE = [
+// Pixel-creature templates. o=outline, b=body, e=eye, l=leg, p=belly mark.
+// Three silhouettes — stout, standard, tall — chosen by the `form` gene so the
+// species varies in build, not just colour.
+const CREATURE_STANDARD = [
   " oooooo ",
   "obbbbbbo",
   "obebbebo",
@@ -238,6 +241,33 @@ const CREATURE = [
   " obbbbo ",
   " l    l ",
 ];
+const CREATURE_STOUT = [
+  " oooooo ",
+  "obbbbbbo",
+  "obebbebo",
+  "obbbbbbo",
+  "oobbbboo",
+  "obbbbbbo",
+  "obbppbbo",
+  "obbbbbbo",
+  " l    l ",
+];
+const CREATURE_TALL = [
+  "  oooo  ",
+  " obbbbo ",
+  " obeebo ",
+  " obbbbo ",
+  "  oooo  ",
+  "  obbo  ",
+  "  obbo  ",
+  "  oppo  ",
+  "  obbo  ",
+  "  obbo  ",
+  "  l  l  ",
+];
+function creatureTemplate(form: number): string[] {
+  return form < 0.34 ? CREATURE_STOUT : form < 0.67 ? CREATURE_STANDARD : CREATURE_TALL;
+}
 
 function topActions(strategy: Record<Action, number>): string {
   return (Object.entries(strategy) as [Action, number][])
