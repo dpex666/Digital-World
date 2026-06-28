@@ -916,6 +916,27 @@ function MapView({
       const r = Math.max(2.5, ppt * 0.26 * (0.75 + c.appearance.size) * stageScale);
       drawCreature(ctx, px, py, r, c, c.id === selectedCharId);
     }
+
+    // Atmosphere, drawn last over everything: a passing storm briefly darkens
+    // the sky, and a soft vignette gives the flat tile-world depth and draws the
+    // eye to the living heart of the map.
+    const storm = sim.environment.weather.storm;
+    if (storm > 0.01) {
+      ctx.fillStyle = `rgba(26,32,50,${(storm * 0.16).toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+    const vg = ctx.createRadialGradient(
+      cssW / 2,
+      cssH * 0.46,
+      Math.min(cssW, cssH) * 0.34,
+      cssW / 2,
+      cssH / 2,
+      Math.max(cssW, cssH) * 0.66,
+    );
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(3,5,11,0.45)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, cssW, cssH);
   }, [sim, selectedCharId, zoom, speed]);
 
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>): void => {
