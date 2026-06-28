@@ -578,6 +578,14 @@ function MapView({
     const y0 = Math.max(0, Math.floor(-offY / ppt));
     const y1 = Math.min(sim.world.height - 1, Math.ceil((cssH - offY) / ppt));
     const detailed = ppt >= 6;
+    // Territory: each settlement projects influence over nearby land, coloured
+    // by its faith (neutral grey if faithless), so the map shows the domains of
+    // religions and the reach of civilisations.
+    const terr = sim.settlements.map((s) => {
+      const faith = s.beliefId ? sim.beliefs.find((b) => b.id === s.beliefId) : undefined;
+      return { x: s.center.x, y: s.center.y, hue: faith ? faith.hue : -1 };
+    });
+    const TERR_R = 7;
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
         const tile = sim.world.tiles[y][x];
@@ -591,6 +599,22 @@ function MapView({
         } else {
           ctx.fillStyle = BASE_COLOR[tile.terrain] ?? "#5e7a44";
           ctx.fillRect(tx, ty, w, w);
+        }
+        if (terr.length && tile.terrain !== "water") {
+          let bestD = Infinity;
+          let bestHue = -2;
+          for (const t of terr) {
+            const d = Math.abs(t.x - x) + Math.abs(t.y - y);
+            if (d < bestD) {
+              bestD = d;
+              bestHue = t.hue;
+            }
+          }
+          if (bestD <= TERR_R) {
+            const a = 0.26 * (1 - bestD / (TERR_R + 1));
+            ctx.fillStyle = bestHue >= 0 ? `hsla(${Math.round(bestHue)},55%,50%,${a.toFixed(3)})` : `rgba(196,190,205,${(a * 0.5).toFixed(3)})`;
+            ctx.fillRect(tx, ty, w, w);
+          }
         }
       }
     }
