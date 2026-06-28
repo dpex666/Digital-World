@@ -799,6 +799,20 @@ function MapView({
     for (const st of sim.settlements) {
       const px = offX + (st.center.x + 0.5) * ppt;
       const py = offY + (st.center.y + 0.5) * ppt;
+      // A settlement reads at the scale of its population: a thriving capital
+      // shows as a broad town, a frontier hamlet as a dot. Radius grows with the
+      // log of headcount so the map communicates where the people actually are.
+      const pop = st.memberIds.length;
+      const ringR = ppt * (1.4 + Math.min(2.8, Math.log2(1 + pop) * 0.55));
+      // Footprint: a faint disc in the realm's colour shows the settlement's
+      // claimed ground swelling with its size.
+      const rhue = realmHue.get(st.id);
+      if (rhue !== undefined) {
+        ctx.fillStyle = `hsla(${Math.round(rhue)},45%,55%,0.10)`;
+        ctx.beginPath();
+        ctx.arc(px, py, ringR, 0, Math.PI * 2);
+        ctx.fill();
+      }
       // Ring colour reflects the village's temperament: gold when peaceable,
       // red when warlike.
       const hostile = st.culture.aggression;
@@ -806,23 +820,23 @@ function MapView({
       const gg = Math.round(196 - hostile * 130);
       const bb = Math.round(106 - hostile * 60);
       ctx.strokeStyle = `rgba(${rr},${gg},${bb},0.7)`;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = pop >= 12 ? 2.2 : 1.5;
       ctx.beginPath();
-      ctx.arc(px, py, ppt * 2, 0, Math.PI * 2);
+      ctx.arc(px, py, ringR, 0, Math.PI * 2);
       ctx.stroke();
       if (ppt > 9) {
         const isCap = capitals.has(st.id);
         ctx.fillStyle = isCap ? "#f0d674" : `rgb(${rr},${gg},${bb})`;
         ctx.font = `${isCap ? "bold " : ""}11px system-ui, sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillText(`${isCap ? "★ " : ""}${st.name}`, px, py - ppt * 2.1);
+        ctx.fillText(`${isCap ? "★ " : ""}${st.name}`, px, py - ringR - ppt * 0.18);
       }
       // Plague: a sickly green pall ring marks a settlement gripped by epidemic.
       if ((st.plague ?? 0) > 0) {
         ctx.strokeStyle = `rgba(150,180,60,${(0.4 + (st.plague ?? 0) * 0.4).toFixed(3)})`;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(px, py, ppt * 1.5, 0, Math.PI * 2);
+        ctx.arc(px, py, ringR * 0.74, 0, Math.PI * 2);
         ctx.stroke();
       }
       // Faith shrine: a small diamond in the belief's colour marks a devout village.
@@ -830,12 +844,13 @@ function MapView({
         const faith = sim.beliefs.find((b) => b.id === st.beliefId);
         if (faith) {
           const sz = Math.max(2.5, ppt * 0.5);
+          const sy = py - ringR + ppt * 0.45;
           ctx.fillStyle = `hsl(${faith.hue},70%,${Math.round(45 + st.devotion * 20)}%)`;
           ctx.beginPath();
-          ctx.moveTo(px, py - ppt * 1.55 - sz);
-          ctx.lineTo(px + sz, py - ppt * 1.55);
-          ctx.lineTo(px, py - ppt * 1.55 + sz);
-          ctx.lineTo(px - sz, py - ppt * 1.55);
+          ctx.moveTo(px, sy - sz);
+          ctx.lineTo(px + sz, sy);
+          ctx.lineTo(px, sy + sz);
+          ctx.lineTo(px - sz, sy);
           ctx.closePath();
           ctx.fill();
         }
