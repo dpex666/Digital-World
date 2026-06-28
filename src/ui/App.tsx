@@ -269,12 +269,41 @@ function creatureTemplate(form: number): string[] {
   return form < 0.34 ? CREATURE_STOUT : form < 0.67 ? CREATURE_STANDARD : CREATURE_TALL;
 }
 
-function topActions(strategy: Record<Action, number>): string {
-  return (Object.entries(strategy) as [Action, number][])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([k, v]) => `${k} ${v.toFixed(1)}`)
-    .join(", ");
+// The being's emergent place in society, derived (not assigned): a faith's
+// founding prophet, a settlement's leader, or a private life.
+function emergentRole(c: Character, sim: SimulationState): string | undefined {
+  const faith = sim.beliefs.find((b) => b.founderId === c.id && sim.settlements.some((s) => s.beliefId === b.id));
+  if (faith) return `prophet of ${faith.name}`;
+  const led = sim.settlements.find((s) => s.leaderId === c.id);
+  if (led) return `leads ${led.name}`;
+  return undefined;
+}
+
+const ACTION_HUES: Record<Action, number> = { forage: 95, cultivate: 130, hunt: 10, build: 38, craft: 270 };
+
+// The learned action-propensities themselves, drawn as bars — this is the
+// self-learning made visible: weights reinforced by lived outcomes, not rules.
+function StrategyBars({ strategy }: { strategy: Record<Action, number> }): JSX.Element {
+  const entries = Object.entries(strategy) as [Action, number][];
+  const max = Math.max(0.001, ...entries.map(([, v]) => v));
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: "#8a8f98", marginBottom: 3 }}>Learned strategy — reinforced by what paid off</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {entries
+          .sort((a, b) => b[1] - a[1])
+          .map(([action, v]) => (
+            <div key={action} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+              <span style={{ width: 54, flex: "0 0 auto", color: "#aeb3bd" }}>{action}</span>
+              <div style={{ flex: 1, height: 8, background: "#0c0e15", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${(Math.max(0, v) / max) * 100}%`, height: "100%", background: `hsl(${ACTION_HUES[action]},60%,55%)`, borderRadius: 4 }} />
+              </div>
+              <span style={{ width: 28, flex: "0 0 auto", textAlign: "right", color: "#778" }}>{v.toFixed(1)}</span>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
 }
 
 export function App(): JSX.Element {
@@ -987,6 +1016,7 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
   const partner = c.partnerId ? kin(c.partnerId) : undefined;
   const parents = c.lineage.parents.map(kin).filter((p): p is Character => !!p);
   const children = c.lineage.children.map(kin).filter((p): p is Character => !!p);
+  const role = emergentRole(c, sim);
 
   const KinChip = ({ p }: { p: Character }): JSX.Element => (
     <span
@@ -1024,9 +1054,10 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
       <Row k="Stage / health" v={`${c.lifeStage} · ${c.health.toFixed(0)} hp`} />
       <Row k="Hunger / thirst" v={`${c.needs.hunger.toFixed(0)} / ${c.needs.thirst.toFixed(0)}`} />
       <Row k="Doing now" v={c.lastAction} />
-      <Row k="Learned leaning" v={topActions(c.strategy)} />
       <Row k="Intellect / educ." v={`${c.genetics.intelligence.toFixed(2)} / ${c.education.toFixed(2)}`} />
       <Row k="Settlement" v={settlement?.name ?? "—"} />
+      {role ? <Row k="Standing" v={role} /> : null}
+      <StrategyBars strategy={c.strategy} />
       <div style={{ color: "#8a8f98", marginTop: 4, fontStyle: "italic" }}>{c.lastDecisionReason}</div>
 
       <div style={{ borderTop: "1px solid #23252c", marginTop: 8, paddingTop: 6 }}>
