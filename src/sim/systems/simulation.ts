@@ -63,6 +63,11 @@ export class SimulationEngine {
 
   private byId = new Map<string, Character>();
   private spatial = new Map<string, Character[]>();
+  // Per-tick indexes that collapse hot O(N×households / N×structures / N×settlements)
+  // lookups to O(1), so dense worlds stay fast.
+  private byHousehold = new Map<string, Household>();
+  private bySettlement = new Map<string, Settlement>();
+  private structureIndex = new Map<string, Set<string>>();
   private tech: TechEffects = zeroEffects(); // aggregated discovered-technique effects
   private popNow = 2; // living population at the start of the current tick
 
@@ -200,12 +205,36 @@ export class SimulationEngine {
 
   private household(id?: string): Household | undefined {
     if (!id) return undefined;
-    return this.state.households.find((h) => h.id === id);
+    return this.byHousehold.get(id) ?? this.state.households.find((h) => h.id === id);
+  }
+
+  private settlementById(id?: string): Settlement | undefined {
+    if (!id) return undefined;
+    return this.bySettlement.get(id) ?? this.state.settlements.find((s) => s.id === id);
   }
 
   private hasStructure(homeId: string | undefined, type: string): boolean {
     if (!homeId) return false;
+    const set = this.structureIndex.get(homeId);
+    if (set) return set.has(type);
     return this.state.structures.some((s) => s.type === type && s.ownerHouseholdId === homeId);
+  }
+
+  private rebuildIndexes(): void {
+    this.byHousehold.clear();
+    for (const h of this.state.households) this.byHousehold.set(h.id, h);
+    this.bySettlement.clear();
+    for (const s of this.state.settlements) this.bySettlement.set(s.id, s);
+    this.structureIndex.clear();
+    for (const st of this.state.structures) {
+      if (!st.ownerHouseholdId) continue;
+      let set = this.structureIndex.get(st.ownerHouseholdId);
+      if (!set) {
+        set = new Set();
+        this.structureIndex.set(st.ownerHouseholdId, set);
+      }
+      set.add(st.type);
+    }
   }
 
   private findCradle(tiles: SimulationState["world"]["tiles"], width: number, height: number): Vec2 {
@@ -297,7 +326,7 @@ export class SimulationEngine {
 
   private settlementKnowledge(c: Character): number {
     if (!c.settlementId) return 0;
-    return this.state.settlements.find((s) => s.id === c.settlementId)?.knowledge ?? 0;
+    return this.settlementById(c.settlementId)?.knowledge ?? 0;
   }
 
   // Physical feasibility / bodily capability only — no strategic hints. Whether
@@ -676,7 +705,7 @@ export class SimulationEngine {
     // self-throttles as numbers approach the land's carrying capacity.
     const earlyBoom = 1 + 7 * Math.max(0, 1 - this.popNow / 90);
     // A faith that prizes fertility quickens its followers' families.
-    const st = c.settlementId ? this.state.settlements.find((s) => s.id === c.settlementId) : undefined;
+    const st = c.settlementId ? this.settlementById(c.settlementId) : undefined;
     const faith = st?.beliefId ? this.beliefById(st.beliefId) : undefined;
     const faithFert = faith ? 1 + faith.tenets.fertility * 0.3 * st!.devotion : 1;
 
@@ -1498,6 +1527,7 @@ export class SimulationEngine {
       this.updateEnvironment();
       this.updateResources();
       this.buildSpatial();
+      this.rebuildIndexes();
 
       const snapshot = this.state.characters.filter((c) => c.alive);
       this.popNow = snapshot.length;
