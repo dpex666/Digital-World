@@ -657,27 +657,30 @@ export class SimulationEngine {
   }
 
   // Pick a habitable tile a few steps away to found a new household on, so the
-  // population fans out from the cradle over generations.
+  // population fans out from the cradle over generations. A new couple seeks
+  // fertile *open* land in whatever direction it lies — drawn to good ground and
+  // away from crowding — rather than blindly pushing toward a fixed bearing. This
+  // keeps the people spreading across the whole world instead of heaping into one
+  // corner.
   private findDispersalSite(from: Vec2): Vec2 {
     const w = this.state.world.width;
     const h = this.state.world.height;
-    // Bias movement outward from the world's centre, so each generation pushes
-    // the frontier into open land rather than circling the cradle.
-    const outward = Math.atan2(from.y - h / 2, from.x - w / 2);
     let fallback: Vec2 = { ...from };
     let best: Vec2 | null = null;
-    let bestFert = -1;
-    for (let attempt = 0; attempt < 14; attempt += 1) {
-      const ang = outward + this.rng.range(-1.3, 1.3);
-      const dist = 3 + this.rng.int(8);
+    let bestScore = -Infinity;
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      const ang = this.rng.range(0, Math.PI * 2);
+      const dist = 3 + this.rng.int(9);
       const nx = Math.round(from.x + Math.cos(ang) * dist);
       const ny = Math.round(from.y + Math.sin(ang) * dist);
-      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
       const t = this.state.world.tiles[ny][nx];
       if (t.terrain === "water" || t.terrain === "mountain") continue;
       fallback = { x: nx, y: ny };
-      if (t.fertility > bestFert) {
-        bestFert = t.fertility;
+      const crowd = Math.min(8, this.nearby({ x: nx, y: ny }, 2).length);
+      const score = t.fertility * 5 + (t.resources.food ?? 0) - t.hazard * 3 - crowd * 0.8;
+      if (score > bestScore) {
+        bestScore = score;
         best = { x: nx, y: ny };
       }
     }
@@ -809,13 +812,24 @@ export class SimulationEngine {
   private maybeMigrate(home: Household): void {
     const occupant = home.memberIds.map((id) => this.byId.get(id)).find((c) => c?.alive && c.lifeStage !== "infant");
     if (!occupant) return;
+    if (home.migrateBias === undefined) home.migrateBias = 0.12;
     const tile = this.state.world.tiles[home.location.y][home.location.x];
     const local = (tile.resources.food ?? 0) + (home.storage.food ?? 0);
-    if (local > 2.5 || this.hasStructure(home.id, "cultivation")) return;
+    const settled = this.hasStructure(home.id, "cultivation");
+
+    // Frontier pull: a crowded home with little spare land nearby feels the urge
+    // to strike out for open country far away. Whether a lineage acts on that
+    // urge is its learned wanderlust — pioneers breed pioneers, homebodies stay.
+    const crowd = this.nearby(home.location, 3).length;
+    if (!settled && crowd >= 9 && local < 6 && this.rng.next() < home.migrateBias * 0.5) {
+      this.pioneer(home);
+      return;
+    }
+
+    if (local > 2.5 || settled) return;
     // Learned wanderlust: the propensity to move on is reinforced when moving
     // finds better land and decays when it doesn't, so lineages that benefit
     // from roaming keep roaming and those that don't settle down.
-    if (home.migrateBias === undefined) home.migrateBias = 0.12;
     if (this.rng.next() > home.migrateBias) return;
 
     const hereScore = (tile.resources.food ?? 0) + tile.fertility * 4;
@@ -844,6 +858,44 @@ export class SimulationEngine {
         const mm = this.byId.get(id);
         if (mm && mm.alive) mm.location = { ...best };
       }
+    }
+  }
+
+  // A great journey: a pioneer family leaves the crowd behind and travels far to
+  // settle open, fertile country — the seed of a new frontier settlement. The
+  // reach of the journey grows with the lineage's learned wanderlust.
+  private pioneer(home: Household): void {
+    const w = this.state.world.width;
+    const h = this.state.world.height;
+    const reach = Math.round(7 + (home.migrateBias ?? 0.12) * 16);
+    let best: Vec2 | null = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < 26; i += 1) {
+      const ang = this.rng.range(0, Math.PI * 2);
+      const dist = this.rng.range(reach * 0.5, reach);
+      const nx = Math.round(home.location.x + Math.cos(ang) * dist);
+      const ny = Math.round(home.location.y + Math.sin(ang) * dist);
+      if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
+      const t = this.state.world.tiles[ny][nx];
+      if (t.terrain === "water" || t.terrain === "mountain") continue;
+      // Prefer fertile, low-hazard, *open* land — the appeal of empty frontier.
+      const openness = 8 - Math.min(8, this.nearby({ x: nx, y: ny }, 3).length);
+      const score = t.fertility * 5 + (t.resources.food ?? 0) - t.hazard * 4 + openness * 1.4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x: nx, y: ny };
+      }
+    }
+    const hereFert = this.state.world.tiles[home.location.y][home.location.x].fertility * 5;
+    if (best && bestScore > hereFert) {
+      home.location = best;
+      for (const id of home.memberIds) {
+        const mm = this.byId.get(id);
+        if (mm && mm.alive) mm.location = { ...best };
+      }
+      home.migrateBias = Math.min(0.7, (home.migrateBias ?? 0.12) + 0.04);
+    } else {
+      home.migrateBias = Math.max(0.03, (home.migrateBias ?? 0.12) - 0.02);
     }
   }
 
@@ -1330,7 +1382,18 @@ export class SimulationEngine {
       buckets.set(key, arr);
     }
     for (const [, group] of buckets) {
-      if (group.length < 2) continue;
+      // Two neighbouring families anchor a settlement anywhere; a lone pioneer
+      // family founds a frontier outpost only when it has struck out far from any
+      // existing settlement onto genuinely good ground — so leaps become villages
+      // without every wandering household spawning one next door.
+      if (group.length < 2) {
+        const h0 = group[0];
+        const t0 = this.state.world.tiles[h0.location.y][h0.location.x];
+        const farFromAll = this.state.settlements.every(
+          (s) => Math.abs(s.center.x - h0.location.x) + Math.abs(s.center.y - h0.location.y) >= 8,
+        );
+        if (!(farFromAll && t0.fertility > 0.45 && h0.memberIds.length >= 2)) continue;
+      }
       const cx = Math.round(group.reduce((s, h) => s + h.location.x, 0) / group.length);
       const cy = Math.round(group.reduce((s, h) => s + h.location.y, 0) / group.length);
       const num = this.state.nextSettlementNum++;
