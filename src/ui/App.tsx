@@ -493,6 +493,7 @@ function epicColor(kind: string): string {
   if (kind === "war") return "#ef6f6f";
   if (kind === "settlement") return "#9ec7e8";
   if (kind === "growth") return "#7fd1a3";
+  if (kind === "plague") return "#b6c84a";
   return "#aab";
 }
 
@@ -686,6 +687,14 @@ function MapView({
         ctx.font = "11px system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillText(st.name, px, py - ppt * 2.1);
+      }
+      // Plague: a sickly green pall ring marks a settlement gripped by epidemic.
+      if ((st.plague ?? 0) > 0) {
+        ctx.strokeStyle = `rgba(150,180,60,${(0.4 + (st.plague ?? 0) * 0.4).toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, py, ppt * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
       }
       // Faith shrine: a small diamond in the belief's colour marks a devout village.
       if (st.beliefId) {
@@ -967,6 +976,7 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
       <Row k="Faith" v={faith ? `${faith.name} (devotion ${s.devotion.toFixed(2)})` : "none"} />
+      {(s.plague ?? 0) > 0 ? <Row k="Health" v={`⚠ plague (${(s.plague ?? 0).toFixed(2)})`} /> : null}
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
       <Row k="Aggression" v={s.culture.aggression.toFixed(2)} />
       <Row k="Trade openness" v={s.culture.tradePreference.toFixed(2)} />

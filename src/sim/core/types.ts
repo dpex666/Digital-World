@@ -159,6 +159,7 @@ export interface Settlement {
   populationPeak: number;
   beliefId?: ID;
   devotion: number;
+  plague?: number; // active epidemic intensity (0/undefined = healthy)
   culture: {
     cooperation: number;
     tradePreference: number;
@@ -290,7 +291,7 @@ export interface HistoryEvent {
 export interface Milestone {
   tick: number;
   year: number;
-  kind: "genesis" | "settlement" | "epoch" | "faith" | "war" | "growth";
+  kind: "genesis" | "settlement" | "epoch" | "faith" | "war" | "growth" | "plague";
   message: string;
 }
 

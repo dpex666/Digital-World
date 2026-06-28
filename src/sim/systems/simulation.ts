@@ -971,6 +971,46 @@ export class SimulationEngine {
     this.milestone("faith", `${founder ? founder.name : "The elders"} of ${s.name} founded the faith of ${belief.name}.`);
   }
 
+  // Disease: crowded settlements may suffer outbreaks that kill and spread to
+  // neighbours, eased as the people discover medicine (their health techs).
+  private updatePlagues(): void {
+    const medicine = 1 / (1 + this.tech.health); // <1, shrinks as health tech grows
+    for (const s of this.state.settlements) {
+      const members = s.memberIds.map((id) => this.byId.get(id)).filter((m): m is Character => !!m && m.alive);
+      const intensity = s.plague ?? 0;
+      if (intensity > 0) {
+        let dead = 0;
+        for (const m of members) {
+          if (this.rng.next() < 0.02 * intensity * (1 - m.genetics.resilience * 0.4) * medicine) {
+            this.kill(m, "the plague");
+            dead += 1;
+          }
+        }
+        s.culture.cooperation = Math.max(0, s.culture.cooperation - 0.01);
+        s.plague = Math.max(0, intensity - this.rng.range(0.03, 0.07));
+        if (s.plague === 0 && dead >= 0) this.log("death", `The plague in ${s.name} has burned out.`);
+        // spread to nearby settlements
+        for (const o of this.state.settlements) {
+          if (o === s || (o.plague ?? 0) > 0 || o.memberIds.length < 2) continue;
+          const d = Math.abs(o.center.x - s.center.x) + Math.abs(o.center.y - s.center.y);
+          if (d <= 12 && this.rng.next() < 0.015 * intensity) {
+            o.plague = intensity * 0.85;
+            this.log("death", `The plague spread from ${s.name} to ${o.name}.`);
+          }
+        }
+      } else if (members.length >= 8) {
+        // spontaneous outbreak, likelier when crowded and short on medicine
+        if (this.rng.next() < 0.00009 * (members.length / 12) * medicine) {
+          s.plague = this.rng.range(0.6, 1);
+          this.log("death", `A plague broke out in ${s.name}.`);
+          if (!this.state.epic.some((e) => e.kind === "plague")) {
+            this.milestone("plague", `A great plague sweeps ${s.name}.`);
+          }
+        }
+      }
+    }
+  }
+
   // Faiths are born from charismatic minds, deepen with devotion, and reshape
   // the culture of those who hold them.
   private updateBeliefs(): void {
@@ -1049,6 +1089,7 @@ export class SimulationEngine {
         foundedTick: this.state.tick,
         populationPeak: 0,
         devotion: 0,
+        plague: 0,
         culture: { cooperation: 0.4, tradePreference: 0.3, aggression: 0.2, innovation: 0.3 },
       };
       for (const h of group) h.settlementId = settlement.id;
@@ -1312,6 +1353,7 @@ export class SimulationEngine {
 
       this.updateSettlements();
       this.updateBeliefs();
+      this.updatePlagues();
       this.interSettlement();
       if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
       this.advanceResearch();
