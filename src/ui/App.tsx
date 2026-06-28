@@ -910,21 +910,28 @@ function Faiths({ sim }: { sim: SimulationState }): JSX.Element {
     if (t.aggression < -0.3) traits.push("pacifist");
     return traits.length ? traits.join(", ") : "quiet";
   };
+  const prophetName = (id?: string): string | undefined => (id ? sim.characters.find((c) => c.id === id)?.name : undefined);
   return (
     <div>
       {living
         .sort((a, b) => (followers.get(b.id) ?? 0) - (followers.get(a.id) ?? 0))
-        .map((b) => (
-          <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12.5 }}>
-            <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${b.hue},65%,60%)`, boxShadow: `0 0 6px hsl(${b.hue},65%,60%)` }} />
-            <div>
+        .map((b) => {
+          const prophet = prophetName(b.founderId);
+          return (
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12.5 }}>
+              <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${b.hue},65%,60%)`, boxShadow: `0 0 6px hsl(${b.hue},65%,60%)` }} />
               <div>
-                <b>{b.name}</b> <span style={{ color: "#778" }}>· {followers.get(b.id)} faithful</span>
+                <div>
+                  <b>{b.name}</b> <span style={{ color: "#778" }}>· {followers.get(b.id)} faithful</span>
+                </div>
+                <div style={{ color: "#8a8f98", fontSize: 11 }}>
+                  {tenetWord(b)}
+                  {prophet ? <span style={{ color: "#778" }}> · prophet {prophet}</span> : null}
+                </div>
               </div>
-              <div style={{ color: "#8a8f98", fontSize: 11 }}>{tenetWord(b)}</div>
             </div>
-          </div>
-        ))}
+          );
+        })}
     </div>
   );
 }

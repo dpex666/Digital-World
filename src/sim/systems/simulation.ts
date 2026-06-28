@@ -1071,15 +1071,47 @@ export class SimulationEngine {
     return this.state.beliefs.find((b) => b.id === id);
   }
 
+  // A being's standing — the lived success that earns it a hearing. Prophets,
+  // leaders and exemplars emerge from this, not from a flat dice roll.
+  private standing(c: Character): number {
+    const home = this.household(c.householdId);
+    const fed = home && (home.storage.food ?? 0) > home.memberIds.length ? 0.6 : 0;
+    return (
+      Math.min(2, c.ageDays / YEAR / 35) +
+      c.lineage.children.length * 0.25 +
+      Math.min(1, c.relationships.length * 0.05) +
+      c.intelligence * 0.5 +
+      c.education * 0.6 +
+      c.personality.curiosity * 0.4 +
+      fed
+    );
+  }
+
   private foundBelief(s: Settlement, founder?: Character): void {
-    const r = () => this.rng.range(-1, 1);
+    const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+    const p = founder?.personality;
+    // A faith reflects the soul of its prophet: the sociable preach community,
+    // the aggressive a militant creed, the curious an inquisitive one.
+    const tenets = p
+      ? {
+          cooperation: clamp((p.sociability - 0.5) * 2 + this.rng.range(-0.3, 0.3)),
+          aggression: clamp((p.aggression - 0.35) * 2.5 + this.rng.range(-0.3, 0.3)),
+          innovation: clamp((p.curiosity - 0.5) * 2 + this.rng.range(-0.3, 0.3)),
+          fertility: Math.max(0, this.rng.range(-0.4, 1)),
+        }
+      : {
+          cooperation: this.rng.range(-1, 1),
+          aggression: this.rng.range(-1, 1),
+          innovation: this.rng.range(-1, 1),
+          fertility: Math.max(0, this.rng.range(-1, 1)),
+        };
     const belief: Belief = {
       id: makeId("faith"),
       name: wordFor(this.state.language, this.rng, `faith-${this.state.beliefs.length}`),
       hue: this.rng.range(0, 360),
       foundedTick: this.state.tick,
       founderId: founder?.id,
-      tenets: { cooperation: r(), aggression: r(), innovation: r(), fertility: Math.max(0, r()) },
+      tenets,
     };
     this.state.beliefs.push(belief);
     s.beliefId = belief.id;
@@ -1160,9 +1192,23 @@ export class SimulationEngine {
         s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression + b.tenets.aggression * d));
         s.culture.innovation = Math.max(0, Math.min(1, s.culture.innovation + b.tenets.innovation * d));
       } else if (s.memberIds.length >= 4) {
-        const leader = this.byId.get(s.leaderId ?? "");
-        const spark = leader ? leader.intelligence * (0.4 + leader.education) * (0.3 + leader.personality.curiosity) : 0.3;
-        if (this.rng.next() < 0.0006 * spark) this.foundBelief(s, leader);
+        // A prophet is not appointed — it emerges. Whoever in the settlement has
+        // earned the most standing through their lived success is the one whose
+        // vision can take root and spread to others.
+        let prophet: Character | undefined;
+        let bestStanding = 0;
+        for (const id of s.memberIds) {
+          const m = this.byId.get(id);
+          if (!m || !m.alive || (m.lifeStage !== "adult" && m.lifeStage !== "elder")) continue;
+          const st = this.standing(m);
+          if (st > bestStanding) {
+            bestStanding = st;
+            prophet = m;
+          }
+        }
+        // The more a prophet's curiosity drives them, the likelier the spark.
+        const spark = prophet ? bestStanding * (0.4 + prophet.personality.curiosity) : 0;
+        if (prophet && this.rng.next() < 0.00045 * spark) this.foundBelief(s, prophet);
       }
     }
     // Keep the registry bounded; forgotten faiths fade from the record.
