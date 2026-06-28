@@ -1378,9 +1378,32 @@ export class SimulationEngine {
         .map((st) => st.id);
       s.populationPeak = Math.max(s.populationPeak, members.length);
 
+      // Leadership emerges from the same lived standing that raises prophets:
+      // whoever has earned the most influence holds sway, weighted also by their
+      // social pull. An incumbent keeps a small edge, so authority is stable and
+      // only passes when a clearly worthier figure rises — succession, not churn.
       const adults = members.filter((m) => m.lifeStage === "adult" || m.lifeStage === "elder");
-      const leader = adults.sort((a, b) => b.ageDays * (0.5 + b.skills.social) - a.ageDays * (0.5 + a.skills.social))[0];
+      const prevLeaderId = s.leaderId;
+      let leader: Character | undefined;
+      let bestSway = -1;
+      for (const m of adults) {
+        const sway = this.standing(m) * (0.6 + m.skills.social) * (m.id === s.leaderId ? 1.15 : 1);
+        if (sway > bestSway) {
+          bestSway = sway;
+          leader = m;
+        }
+      }
       s.leaderId = leader?.id;
+      // A peaceful transfer of authority is a moment worth recording — but only
+      // once the settlement is established, and not the very first appointment.
+      if (leader && prevLeaderId && prevLeaderId !== leader.id && members.length >= 5) {
+        const prev = this.byId.get(prevLeaderId);
+        if (prev && prev.alive) {
+          this.log("social", `${leader.name} rose to lead ${s.name}, succeeding ${prev.name}.`, [leader.id]);
+        } else if (!prev || !prev.alive) {
+          this.log("social", `${leader.name} took up the mantle of leadership in ${s.name}.`, [leader.id]);
+        }
+      }
       const avg = (f: (m: Character) => number) => members.reduce((sum, m) => sum + f(m), 0) / members.length;
       s.culture.cooperation = Math.max(0, Math.min(1, s.culture.cooperation * 0.99 + (avg((m) => m.personality.sociability) + members.length / 40) * 0.01));
       s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression * 0.99 + avg((m) => m.personality.aggression) * 0.01));
