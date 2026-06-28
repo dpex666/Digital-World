@@ -853,69 +853,116 @@ export class SimulationEngine {
     return moved;
   }
 
-  // Each tick, neighbouring settlements may trade or raid, driven by their own
-  // emergent cultures (trade preference vs. aggression) and how hungry they are.
-  private interSettlement(): void {
-    const sets = this.state.settlements.filter((s) => s.memberIds.length >= 3);
-    const food = this.state.elements.food.name;
-    for (let i = 0; i < sets.length; i += 1) {
-      for (let j = i + 1; j < sets.length; j += 1) {
-        const a = sets[i];
-        const b = sets[j];
-        const dist = Math.abs(a.center.x - b.center.x) + Math.abs(a.center.y - b.center.y);
-        if (dist > 20) continue;
-        const proximity = 1 - dist / 20;
-        const tradeDrive = (a.culture.tradePreference + b.culture.tradePreference) / 2;
-        const hostility = (a.culture.aggression + b.culture.aggression) / 2;
-        const aPer = this.settlementFoodPer(a);
-        const bPer = this.settlementFoodPer(b);
-        const gap = Math.abs(aPer - bPer);
-        const scarcity = Math.max(0, 1 - Math.min(aPer, bPer) / 3);
+  private settlementWellbeing(s: Settlement): number {
+    return this.settlementFoodPer(s) + 0.15 * s.memberIds.length;
+  }
 
-        // Border friction: close, hungry neighbours grow warier of each other.
-        if (proximity > 0.3 && scarcity > 0.45) {
-          a.culture.aggression = Math.min(1, a.culture.aggression + 0.004);
-          b.culture.aggression = Math.min(1, b.culture.aggression + 0.004);
-        }
+  private ensurePolicy(s: Settlement): void {
+    if (!s.policy) {
+      s.policy = { raid: 1, trade: 1, abstain: 1.4 }; // begin disposed to peace, then learn
+      s.lastMacroAction = "abstain";
+      s.macroBaseline = 0;
+      s.lastWellbeing = this.settlementWellbeing(s);
+    }
+  }
 
-        // Faith binds or divides: shared belief keeps the peace and quickens
-        // trade; rival faiths, held with devotion, inflame holy war.
-        const sameFaith = !!a.beliefId && a.beliefId === b.beliefId;
-        const rivalFaith = !!a.beliefId && !!b.beliefId && a.beliefId !== b.beliefId;
-        const raidMod = sameFaith ? 0.2 : rivalFaith ? 1 + 0.9 * ((a.devotion + b.devotion) / 2) : 1;
-        const tradeMod = sameFaith ? 1.7 : rivalFaith ? 0.7 : 1;
-
-        const r = this.rng.next();
-        // Raids are driven mostly by hostility and proximity (territory and
-        // loot), with hunger sharpening them — but kept occasional so war is
-        // dramatic, not a constant population-crusher.
-        const raidChance = 0.03 * proximity * hostility * (0.4 + scarcity) * raidMod;
-        const tradeChance = 0.05 * proximity * tradeDrive * Math.min(1, gap / 3) * tradeMod;
-
-        if (hostility > 0.28 && r < raidChance) {
-          this.raid(a, b, food, rivalFaith);
-        } else if (gap > 1.5 && r < raidChance + tradeChance) {
-          const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
-          const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length);
-          if (amount > 0.5) {
-            rich.knowledge = Math.min(8, rich.knowledge + 0.02);
-            poor.knowledge = Math.min(8, poor.knowledge + 0.03);
-            rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
-            poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
-            this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
-            // Faith travels with the caravans: a devout trading partner may win converts.
-            if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.03 * rich.devotion) {
-              const faith = this.beliefById(rich.beliefId);
-              poor.beliefId = rich.beliefId;
-              poor.devotion = 0.25;
-              this.log("belief", `${poor.name} embraced the faith of ${faith?.name ?? "their neighbours"} through trade with ${rich.name}.`);
-            }
-            // Trade is constant; only chronicle it now and then so the feed stays varied.
-            if (this.rng.next() < 0.2) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
-          }
-        }
+  private nearestSettlement(s: Settlement): Settlement | undefined {
+    let best: Settlement | undefined;
+    let bestD = 21;
+    for (const o of this.state.settlements) {
+      if (o === s || o.memberIds.length < 2) continue;
+      const d = Math.abs(o.center.x - s.center.x) + Math.abs(o.center.y - s.center.y);
+      if (d < bestD) {
+        bestD = d;
+        best = o;
       }
     }
+    return best;
+  }
+
+  // Choose how to treat a neighbour by sampling the learned policy, weighted by
+  // what is actually feasible (strength for a raid, surplus for a trade) and by
+  // faith kinship as a disposition — but the *propensity* to war or trade is
+  // learned, not coded.
+  private chooseMacro(s: Settlement, n: Settlement): "raid" | "trade" | "abstain" {
+    const p = s.policy!;
+    const force = this.settlementForce(s) / (this.settlementForce(n) + 1);
+    const sameFaith = !!s.beliefId && s.beliefId === n.beliefId;
+    const raidFeas = Math.max(0.04, Math.min(2, force - 0.6)) * (sameFaith ? 0.35 : 1);
+    const sPer = this.settlementFoodPer(s);
+    const nPer = this.settlementFoodPer(n);
+    const tradeFeas = sPer > nPer ? Math.min(1.4, (sPer - nPer) / 3 + 0.2) : 0.15;
+    const feas = { raid: raidFeas, trade: tradeFeas, abstain: 0.6 };
+    const acts = ["raid", "trade", "abstain"] as const;
+    const weights = acts.map((a) => Math.pow(Math.max(0.05, p[a]), 1.5) * feas[a]);
+    const total = weights.reduce((t, w) => t + w, 0);
+    let roll = this.rng.next() * total;
+    for (let i = 0; i < acts.length; i += 1) {
+      roll -= weights[i];
+      if (roll <= 0) return acts[i];
+    }
+    return "abstain";
+  }
+
+  private reinforceMacro(s: Settlement): void {
+    const w = this.settlementWellbeing(s);
+    const reward = w - (s.lastWellbeing ?? w);
+    const adv = reward - (s.macroBaseline ?? 0);
+    const lr = 0.06;
+    const act = s.lastMacroAction ?? "abstain";
+    s.policy![act] = Math.max(0.1, Math.min(5, s.policy![act] + lr * Math.max(-3, Math.min(3, adv))));
+    s.macroBaseline = (s.macroBaseline ?? 0) + 0.05 * (reward - (s.macroBaseline ?? 0));
+    // light regularisation so no strategy dies out entirely
+    const mean = (s.policy!.raid + s.policy!.trade + s.policy!.abstain) / 3;
+    for (const a of ["raid", "trade", "abstain"] as const) s.policy![a] += 0.02 * (mean - s.policy![a]);
+    s.lastWellbeing = w;
+  }
+
+  // Each settlement, now and then, reflects on how it has fared and chooses how
+  // to treat its nearest neighbour — its diplomacy emerges from reinforcement,
+  // not from a hand-tuned probability of war.
+  private interSettlement(): void {
+    const food = this.state.elements.food.name;
+    for (const s of this.state.settlements) {
+      if (s.memberIds.length < 3) continue;
+      this.ensurePolicy(s);
+      if (this.rng.next() > 0.03) continue; // occasional macro-move
+      this.reinforceMacro(s); // judge the last choice's outcome, then decide anew
+      const n = this.nearestSettlement(s);
+      if (!n) {
+        s.lastMacroAction = "abstain";
+        continue;
+      }
+      const action = this.chooseMacro(s, n);
+      s.lastMacroAction = action;
+      if (action === "raid") {
+        const rivalFaith = !!s.beliefId && !!n.beliefId && s.beliefId !== n.beliefId;
+        this.raid(s, n, food, rivalFaith);
+      } else if (action === "trade") {
+        this.tradeBetween(s, n, food);
+      }
+    }
+  }
+
+  private tradeBetween(a: Settlement, b: Settlement, food: string): void {
+    const aPer = this.settlementFoodPer(a);
+    const bPer = this.settlementFoodPer(b);
+    const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
+    const gap = Math.abs(aPer - bPer);
+    const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length + 1);
+    if (amount <= 0.5) return;
+    rich.knowledge = Math.min(8, rich.knowledge + 0.02);
+    poor.knowledge = Math.min(8, poor.knowledge + 0.03);
+    rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
+    poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
+    this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
+    if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.04 * rich.devotion) {
+      const faith = this.beliefById(rich.beliefId);
+      poor.beliefId = rich.beliefId;
+      poor.devotion = 0.25;
+      this.log("belief", `${poor.name} embraced the faith of ${faith?.name ?? "their neighbours"} through trade with ${rich.name}.`);
+    }
+    if (this.rng.next() < 0.25) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
   }
 
   private raid(a: Settlement, b: Settlement, food: string, holy = false): void {
@@ -933,9 +980,14 @@ export class SimulationEngine {
         }
       }
     }
+    // War is costly to the aggressor too — so raiding only pays against a
+    // genuinely weaker foe, and learned diplomacy must weigh that.
     for (const id of agg.memberIds) {
       const m = this.byId.get(id);
-      if (m && m.alive && this.rng.next() < 0.04) m.health = Math.max(1, m.health - this.rng.range(2, 8));
+      if (m && m.alive && this.rng.next() < 0.08) {
+        m.health -= this.rng.range(3, 13);
+        if (m.health <= 0) this.kill(m, `the war on ${vic.name}`);
+      }
     }
     vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
     agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
@@ -947,6 +999,24 @@ export class SimulationEngine {
     );
     if (holy && !this.state.epic.some((e) => e.kind === "war")) {
       this.milestone("war", `The first holy war erupts: ${agg.name} falls upon ${vic.name}.`);
+    }
+
+    // Conquest: an overwhelming victor in a war of faith may annex the loser —
+    // forcing its conversion, so the realm-grouping absorbs it next tick. Borders
+    // shift, and empires rise on the ruins of the conquered.
+    if (
+      agg.beliefId &&
+      agg.beliefId !== vic.beliefId &&
+      this.settlementForce(agg) > this.settlementForce(vic) * 1.6 &&
+      vic.memberIds.length >= 2 &&
+      this.rng.next() < 0.07
+    ) {
+      const faith = this.beliefById(agg.beliefId);
+      vic.beliefId = agg.beliefId;
+      vic.devotion = 0.2;
+      vic.culture.aggression = Math.max(0, vic.culture.aggression - 0.1);
+      this.log("conflict", `${agg.name} conquered ${vic.name}, annexing it under the faith of ${faith?.name ?? "the victors"}.`);
+      this.milestone("war", `${agg.name} conquers ${vic.name}.`);
     }
   }
 
@@ -1106,13 +1176,17 @@ export class SimulationEngine {
         this.state.realms.push(realm);
       }
       claimed.add(realm.id);
-      const wasMulti = realm.settlementIds.length >= 2;
+      const prevSize = realm.settlementIds.length;
       realm.settlementIds = comp.map((s) => s.id);
       realm.beliefId = comp.find((s) => s.beliefId)?.beliefId;
+      realm.capitalId = comp.slice().sort((a, b) => b.memberIds.length - a.memberIds.length)[0]?.id;
       const pop = comp.reduce((t, s) => t + s.memberIds.length, 0);
       realm.populationPeak = Math.max(realm.populationPeak, pop);
-      if (!wasMulti && comp.length >= 2 && !this.state.epic.some((e) => e.message.startsWith(`The realm of ${realm!.name}`))) {
+      if (prevSize < 2 && comp.length >= 2 && !this.state.epic.some((e) => e.message.startsWith(`The realm of ${realm!.name}`))) {
         this.milestone("settlement", `The realm of ${realm.name} unites ${comp.length} settlements.`);
+      }
+      if (prevSize < 4 && comp.length >= 4 && !this.state.epic.some((e) => e.message.startsWith(`The empire of ${realm!.name}`))) {
+        this.milestone("settlement", `The empire of ${realm.name} spans ${comp.length} settlements.`);
       }
       survivors.push(realm);
     }
@@ -1170,6 +1244,10 @@ export class SimulationEngine {
         populationPeak: 0,
         devotion: 0,
         plague: 0,
+        policy: { raid: 1, trade: 1, abstain: 1.4 },
+        lastMacroAction: "abstain",
+        macroBaseline: 0,
+        lastWellbeing: 0,
         culture: { cooperation: 0.4, tradePreference: 0.3, aggression: 0.2, innovation: 0.3 },
       };
       for (const h of group) h.settlementId = settlement.id;

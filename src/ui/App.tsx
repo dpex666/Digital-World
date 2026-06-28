@@ -526,7 +526,9 @@ function Realms({ sim, onSelectSettlement }: { sim: SimulationState; onSelectSet
             <span style={{ width: 12, height: 12, flex: "0 0 auto", borderRadius: 3, background: `hsl(${r.hue},55%,55%)`, boxShadow: `0 0 6px hsl(${r.hue},55%,55%)` }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12.5 }}>
-                <b>{r.name}</b> <span style={{ color: "var(--faint)" }}>· {pop(r)} people · {r.settlementIds.length === 1 ? "city-state" : `${r.settlementIds.length} settlements`}</span>
+                <b>{r.name}</b>
+                {r.settlementIds.length >= 4 ? <span style={{ color: "#f0d674" }}> ⚔ empire</span> : null}{" "}
+                <span style={{ color: "var(--faint)" }}>· {pop(r)} people · {r.settlementIds.length === 1 ? "city-state" : `${r.settlementIds.length} settlements`}</span>
               </div>
               <div style={{ fontSize: 11, color: "var(--muted)" }}>
                 {faithName(r.beliefId)} ·{" "}
@@ -726,7 +728,8 @@ function MapView({
       drawStructure(ctx, px, py, s.type, ppt);
     }
 
-    // Settlements — rings + names.
+    // Settlements — rings + names. Capitals (a realm's largest settlement) get a star.
+    const capitals = new Set(sim.realms.map((r) => r.capitalId).filter((x): x is string => !!x));
     for (const st of sim.settlements) {
       const px = offX + (st.center.x + 0.5) * ppt;
       const py = offY + (st.center.y + 0.5) * ppt;
@@ -742,10 +745,11 @@ function MapView({
       ctx.arc(px, py, ppt * 2, 0, Math.PI * 2);
       ctx.stroke();
       if (ppt > 9) {
-        ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
-        ctx.font = "11px system-ui, sans-serif";
+        const isCap = capitals.has(st.id);
+        ctx.fillStyle = isCap ? "#f0d674" : `rgb(${rr},${gg},${bb})`;
+        ctx.font = `${isCap ? "bold " : ""}11px system-ui, sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillText(st.name, px, py - ppt * 2.1);
+        ctx.fillText(`${isCap ? "★ " : ""}${st.name}`, px, py - ppt * 2.1);
       }
       // Plague: a sickly green pall ring marks a settlement gripped by epidemic.
       if ((st.plague ?? 0) > 0) {
@@ -1039,6 +1043,17 @@ function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; 
   );
 }
 
+// A settlement's learned stance toward its neighbours (reinforcement-learned,
+// not assigned), shown so the viewer can see diplomacy being discovered.
+function dispositionLabel(s: Settlement): string {
+  const p = s.policy;
+  if (!p) return "—";
+  const acts: Array<"raid" | "trade" | "abstain"> = ["raid", "trade", "abstain"];
+  const top = acts.reduce((a, b) => (p[b] > p[a] ? b : a));
+  const word = top === "raid" ? "warlike" : top === "trade" ? "mercantile" : "insular";
+  return `${word} (war ${p.raid.toFixed(1)} · trade ${p.trade.toFixed(1)} · keep ${p.abstain.toFixed(1)})`;
+}
+
 function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JSX.Element {
   const leader = sim.characters.find((c) => c.id === s.leaderId);
   const faith = sim.beliefs.find((b) => b.id === s.beliefId);
@@ -1050,6 +1065,7 @@ function SettlementView({ s, sim }: { s: Settlement; sim: SimulationState }): JS
       <Row k="Founded (yr)" v={String(Math.floor(s.foundedTick / 365))} />
       <Row k="Elder/leader" v={leader?.name ?? "—"} />
       <Row k="Faith" v={faith ? `${faith.name} (devotion ${s.devotion.toFixed(2)})` : "none"} />
+      <Row k="Disposition (learned)" v={dispositionLabel(s)} />
       {(s.plague ?? 0) > 0 ? <Row k="Health" v={`⚠ plague (${(s.plague ?? 0).toFixed(2)})`} /> : null}
       <Row k="Cooperation" v={s.culture.cooperation.toFixed(2)} />
       <Row k="Aggression" v={s.culture.aggression.toFixed(2)} />

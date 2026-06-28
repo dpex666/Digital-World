@@ -160,6 +160,13 @@ export interface Settlement {
   beliefId?: ID;
   devotion: number;
   plague?: number; // active epidemic intensity (0/undefined = healthy)
+  // Learned diplomacy: a reinforcement-learned policy over how to treat
+  // neighbours, updated by how each choice affects the settlement's wellbeing.
+  // War and peace are discovered here, not dictated by a coded formula.
+  policy?: { raid: number; trade: number; abstain: number };
+  lastMacroAction?: "raid" | "trade" | "abstain";
+  macroBaseline?: number;
+  lastWellbeing?: number;
   culture: {
     cooperation: number;
     tradePreference: number;
@@ -176,6 +183,7 @@ export interface Realm {
   name: string;
   hue: number;
   beliefId?: ID;
+  capitalId?: ID;
   settlementIds: ID[];
   foundedTick: number;
   populationPeak: number;
