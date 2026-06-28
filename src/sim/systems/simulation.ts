@@ -66,6 +66,7 @@ export class SimulationEngine {
   constructor(config: SimulationConfig, existingState?: SimulationState) {
     if (existingState) {
       this.state = existingState;
+      if (!this.state.links) this.state.links = []; // back-compat with older saves
       this.rng = new Rng(existingState.rngSeed);
       this.reindex();
       this.aggregateTech();
@@ -130,6 +131,7 @@ export class SimulationEngine {
       households: [household],
       settlements: [],
       nextSettlementNum: 1,
+      links: [],
       history: [],
       metrics: [],
     };
@@ -864,6 +866,7 @@ export class SimulationEngine {
             poor.knowledge = Math.min(8, poor.knowledge + 0.03);
             rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
             poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
+            this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
             // Trade is constant; only chronicle it now and then so the feed stays varied.
             if (this.rng.next() < 0.2) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
           }
@@ -893,6 +896,7 @@ export class SimulationEngine {
     }
     vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
     agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
+    this.state.links.push({ from: { ...agg.center }, to: { ...vic.center }, kind: "raid", tick: this.state.tick });
     this.log(
       "conflict",
       `${agg.name} raided ${vic.name}, seizing ${loot.toFixed(0)} ${food}${killed ? ` and leaving ${killed} dead` : ""}.`,
@@ -1203,6 +1207,7 @@ export class SimulationEngine {
 
       this.updateSettlements();
       this.interSettlement();
+      if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
       this.advanceResearch();
       this.pushMetrics();
       this.prune();

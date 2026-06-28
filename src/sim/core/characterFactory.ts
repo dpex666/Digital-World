@@ -43,17 +43,19 @@ export function randomAppearance(rng: Rng): Appearance {
 // their parents but drift, so the species' appearance evolves over generations.
 export function inheritAppearance(a: Appearance, b: Appearance, rng: Rng): Appearance {
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-  // Hue blends on a circle so colour lineages shift smoothly.
-  let hue = (a.hue + b.hue) / 2 + rng.range(-12, 12);
+  // Hue blends on a circle so colour lineages shift smoothly, but mutates
+  // briskly so descendants of one founding pair visibly diverge over a few
+  // generations rather than all looking alike.
+  let hue = (a.hue + b.hue) / 2 + rng.range(-20, 20);
   if (Math.abs(a.hue - b.hue) > 180) hue += 180;
   hue = ((hue % 360) + 360) % 360;
   return {
     hue,
-    saturation: clamp01((a.saturation + b.saturation) / 2 + rng.range(-0.06, 0.06)),
-    luminance: clamp01((a.luminance + b.luminance) / 2 + rng.range(-0.06, 0.06)),
-    form: clamp01((a.form + b.form) / 2 + rng.range(-0.07, 0.07)),
-    size: clamp01((a.size + b.size) / 2 + rng.range(-0.06, 0.06)),
-    pattern: clamp01((a.pattern + b.pattern) / 2 + rng.range(-0.08, 0.08)),
+    saturation: clamp01((a.saturation + b.saturation) / 2 + rng.range(-0.09, 0.09)),
+    luminance: clamp01((a.luminance + b.luminance) / 2 + rng.range(-0.08, 0.08)),
+    form: clamp01((a.form + b.form) / 2 + rng.range(-0.12, 0.12)),
+    size: clamp01((a.size + b.size) / 2 + rng.range(-0.09, 0.09)),
+    pattern: clamp01((a.pattern + b.pattern) / 2 + rng.range(-0.13, 0.13)),
   };
 }
 
