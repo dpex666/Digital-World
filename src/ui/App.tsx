@@ -394,7 +394,7 @@ export function App(): JSX.Element {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Panel title="Inhabitant">
-            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
+            {selectedChar ? <Inhabitant c={selectedChar} sim={sim} onSelect={setSelectedCharId} /> : <Muted>Tap a being on the map, or a notable life below, to follow it.</Muted>}
           </Panel>
 
           <Panel title="Notable Lives">
@@ -859,34 +859,72 @@ function NotableLives({ sim, onSelect }: { sim: SimulationState; onSelect: (id: 
   );
 }
 
-function Inhabitant({ c, sim }: { c: Character; sim: SimulationState }): JSX.Element {
+function Inhabitant({ c, sim, onSelect }: { c: Character; sim: SimulationState; onSelect: (id: string) => void }): JSX.Element {
   const settlement = sim.settlements.find((s) => s.id === c.settlementId);
+  const byId = new Map(sim.characters.map((p) => [p.id, p] as const));
+  const kin = (id: string): Character | undefined => byId.get(id);
+  const partner = c.partnerId ? kin(c.partnerId) : undefined;
+  const parents = c.lineage.parents.map(kin).filter((p): p is Character => !!p);
+  const children = c.lineage.children.map(kin).filter((p): p is Character => !!p);
+
+  const KinChip = ({ p }: { p: Character }): JSX.Element => (
+    <span
+      onClick={() => onSelect(p.id)}
+      title={`Follow ${p.name}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        cursor: "pointer",
+        background: "#1a1d26",
+        border: "1px solid #2c303c",
+        borderRadius: 10,
+        padding: "1px 7px 1px 4px",
+        margin: "2px 4px 0 0",
+        fontSize: 11.5,
+        opacity: p.alive ? 1 : 0.55,
+      }}
+    >
+      <span style={{ width: 9, height: 9, borderRadius: p.appearance.form > 0.5 ? "50%" : 2, background: appearanceColor(p) }} />
+      {p.name}
+      <span style={{ color: "#667" }}>{p.alive ? `${Math.floor(p.ageDays / 365)}` : "†"}</span>
+    </span>
+  );
+
   return (
     <div style={{ fontSize: 13 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span
-          style={{
-            width: 18,
-            height: 18,
-            borderRadius: c.appearance.form > 0.5 ? "50%" : 3,
-            background: appearanceColor(c),
-            display: "inline-block",
-          }}
-        />
+        <span style={{ width: 18, height: 18, borderRadius: c.appearance.form > 0.5 ? "50%" : 3, background: appearanceColor(c), boxShadow: `0 0 6px ${appearanceColor(c)}` }} />
         <b>{c.name}</b>
         <span style={{ color: "#778" }}>
-          {c.sex === "female" ? "♀" : "♂"} · gen {c.lineage.generation}
+          {c.sex === "female" ? "♀" : "♂"} · gen {c.lineage.generation} · {c.alive ? `${Math.floor(c.ageDays / 365)} yrs` : "deceased"}
         </span>
       </div>
-      <Row k="Age / stage" v={`${Math.floor(c.ageDays / 365)} yrs · ${c.lifeStage}`} />
-      <Row k="Health" v={c.health.toFixed(0)} />
+      <Row k="Stage / health" v={`${c.lifeStage} · ${c.health.toFixed(0)} hp`} />
       <Row k="Hunger / thirst" v={`${c.needs.hunger.toFixed(0)} / ${c.needs.thirst.toFixed(0)}`} />
       <Row k="Doing now" v={c.lastAction} />
       <Row k="Learned leaning" v={topActions(c.strategy)} />
       <Row k="Intellect / educ." v={`${c.genetics.intelligence.toFixed(2)} / ${c.education.toFixed(2)}`} />
-      <Row k="Children" v={String(c.lineage.children.length)} />
       <Row k="Settlement" v={settlement?.name ?? "—"} />
       <div style={{ color: "#8a8f98", marginTop: 4, fontStyle: "italic" }}>{c.lastDecisionReason}</div>
+
+      <div style={{ borderTop: "1px solid #23252c", marginTop: 8, paddingTop: 6 }}>
+        <div style={{ fontSize: 11, color: "#8a8f98" }}>Lineage — tap to follow a relative</div>
+        {partner ? (
+          <div style={{ marginTop: 3 }}>
+            <span style={{ color: "#8a8f98", fontSize: 11 }}>partner</span> <KinChip p={partner} />
+          </div>
+        ) : null}
+        {parents.length ? (
+          <div style={{ marginTop: 3 }}>
+            <span style={{ color: "#8a8f98", fontSize: 11 }}>parents</span> {parents.map((p) => <KinChip key={p.id} p={p} />)}
+          </div>
+        ) : null}
+        <div style={{ marginTop: 3 }}>
+          <span style={{ color: "#8a8f98", fontSize: 11 }}>children ({children.length})</span>{" "}
+          {children.length ? children.slice(0, 16).map((p) => <KinChip key={p.id} p={p} />) : <Muted>none</Muted>}
+        </div>
+      </div>
     </div>
   );
 }
