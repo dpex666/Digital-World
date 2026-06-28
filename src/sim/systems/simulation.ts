@@ -10,6 +10,7 @@ import { generateWorld } from "../core/worldGen";
 import { createLanguage, makeWord, personName, wordFor, driftLanguage } from "../core/language";
 import {
   Action,
+  Belief,
   Character,
   EnvironmentState,
   EventCategory,
@@ -67,6 +68,7 @@ export class SimulationEngine {
     if (existingState) {
       this.state = existingState;
       if (!this.state.links) this.state.links = []; // back-compat with older saves
+      if (!this.state.beliefs) this.state.beliefs = [];
       this.rng = new Rng(existingState.rngSeed);
       this.reindex();
       this.aggregateTech();
@@ -131,6 +133,7 @@ export class SimulationEngine {
       households: [household],
       settlements: [],
       nextSettlementNum: 1,
+      beliefs: [],
       links: [],
       history: [],
       metrics: [],
@@ -650,9 +653,13 @@ export class SimulationEngine {
     // Founder boom: a tiny population breeds fast (r-selection), then growth
     // self-throttles as numbers approach the land's carrying capacity.
     const earlyBoom = 1 + 7 * Math.max(0, 1 - this.popNow / 90);
+    // A faith that prizes fertility quickens its followers' families.
+    const st = c.settlementId ? this.state.settlements.find((s) => s.id === c.settlementId) : undefined;
+    const faith = st?.beliefId ? this.beliefById(st.beliefId) : undefined;
+    const faithFert = faith ? 1 + faith.tenets.fertility * 0.3 * st!.devotion : 1;
 
     const chance = 0.03 * c.genetics.fertility * mate.genetics.fertility * security * warmthFert * healthMult *
-      densityBrake * earlyBoom * (1 + this.tech.fertility);
+      densityBrake * earlyBoom * (1 + this.tech.fertility) * faithFert;
     if (this.rng.next() < chance) {
       c.pregnantBy = mate.id;
       c.gestationRemaining = GESTATION_DAYS;
@@ -849,15 +856,22 @@ export class SimulationEngine {
           b.culture.aggression = Math.min(1, b.culture.aggression + 0.004);
         }
 
+        // Faith binds or divides: shared belief keeps the peace and quickens
+        // trade; rival faiths, held with devotion, inflame holy war.
+        const sameFaith = !!a.beliefId && a.beliefId === b.beliefId;
+        const rivalFaith = !!a.beliefId && !!b.beliefId && a.beliefId !== b.beliefId;
+        const raidMod = sameFaith ? 0.2 : rivalFaith ? 1 + 0.9 * ((a.devotion + b.devotion) / 2) : 1;
+        const tradeMod = sameFaith ? 1.7 : rivalFaith ? 0.7 : 1;
+
         const r = this.rng.next();
         // Raids are driven mostly by hostility and proximity (territory and
         // loot), with hunger sharpening them — but kept occasional so war is
         // dramatic, not a constant population-crusher.
-        const raidChance = 0.03 * proximity * hostility * (0.4 + scarcity);
-        const tradeChance = 0.05 * proximity * tradeDrive * Math.min(1, gap / 3);
+        const raidChance = 0.03 * proximity * hostility * (0.4 + scarcity) * raidMod;
+        const tradeChance = 0.05 * proximity * tradeDrive * Math.min(1, gap / 3) * tradeMod;
 
         if (hostility > 0.28 && r < raidChance) {
-          this.raid(a, b, food);
+          this.raid(a, b, food, rivalFaith);
         } else if (gap > 1.5 && r < raidChance + tradeChance) {
           const [rich, poor] = aPer >= bPer ? [a, b] : [b, a];
           const amount = this.moveFood(rich, poor, gap * 0.4 * poor.memberIds.length);
@@ -867,6 +881,13 @@ export class SimulationEngine {
             rich.culture.cooperation = Math.min(1, rich.culture.cooperation + 0.02);
             poor.culture.cooperation = Math.min(1, poor.culture.cooperation + 0.02);
             this.state.links.push({ from: { ...rich.center }, to: { ...poor.center }, kind: "trade", tick: this.state.tick });
+            // Faith travels with the caravans: a devout trading partner may win converts.
+            if (rich.beliefId && rich.beliefId !== poor.beliefId && this.rng.next() < 0.03 * rich.devotion) {
+              const faith = this.beliefById(rich.beliefId);
+              poor.beliefId = rich.beliefId;
+              poor.devotion = 0.25;
+              this.log("belief", `${poor.name} embraced the faith of ${faith?.name ?? "their neighbours"} through trade with ${rich.name}.`);
+            }
             // Trade is constant; only chronicle it now and then so the feed stays varied.
             if (this.rng.next() < 0.2) this.log("trade", `${rich.name} sent a caravan of ${amount.toFixed(0)} ${food} to ${poor.name}.`);
           }
@@ -875,7 +896,7 @@ export class SimulationEngine {
     }
   }
 
-  private raid(a: Settlement, b: Settlement, food: string): void {
+  private raid(a: Settlement, b: Settlement, food: string, holy = false): void {
     const [agg, vic] = this.settlementForce(a) >= this.settlementForce(b) ? [a, b] : [b, a];
     const loot = this.moveFood(vic, agg, this.settlementFood(vic) * 0.22);
     let killed = 0;
@@ -897,10 +918,66 @@ export class SimulationEngine {
     vic.culture.aggression = Math.min(1, vic.culture.aggression + 0.06); // vengeance hardens them
     agg.culture.cooperation = Math.max(0, agg.culture.cooperation - 0.03);
     this.state.links.push({ from: { ...agg.center }, to: { ...vic.center }, kind: "raid", tick: this.state.tick });
+    const verb = holy ? "waged holy war on" : "raided";
     this.log(
       "conflict",
-      `${agg.name} raided ${vic.name}, seizing ${loot.toFixed(0)} ${food}${killed ? ` and leaving ${killed} dead` : ""}.`,
+      `${agg.name} ${verb} ${vic.name}, seizing ${loot.toFixed(0)} ${food}${killed ? ` and leaving ${killed} dead` : ""}.`,
     );
+  }
+
+  // -------------------------------------------------------------- beliefs
+
+  private beliefById(id?: string): Belief | undefined {
+    if (!id) return undefined;
+    return this.state.beliefs.find((b) => b.id === id);
+  }
+
+  private foundBelief(s: Settlement, founder?: Character): void {
+    const r = () => this.rng.range(-1, 1);
+    const belief: Belief = {
+      id: makeId("faith"),
+      name: wordFor(this.state.language, this.rng, `faith-${this.state.beliefs.length}`),
+      hue: this.rng.range(0, 360),
+      foundedTick: this.state.tick,
+      founderId: founder?.id,
+      tenets: { cooperation: r(), aggression: r(), innovation: r(), fertility: Math.max(0, r()) },
+    };
+    this.state.beliefs.push(belief);
+    s.beliefId = belief.id;
+    s.devotion = 0.3;
+    this.log(
+      "belief",
+      `${founder ? founder.name : "The elders"} of ${s.name} founded the faith of ${belief.name}.`,
+      founder ? [founder.id] : undefined,
+    );
+  }
+
+  // Faiths are born from charismatic minds, deepen with devotion, and reshape
+  // the culture of those who hold them.
+  private updateBeliefs(): void {
+    for (const s of this.state.settlements) {
+      if (s.beliefId) {
+        const b = this.beliefById(s.beliefId);
+        if (!b) {
+          s.beliefId = undefined;
+          continue;
+        }
+        s.devotion = Math.min(1, s.devotion + 0.0015);
+        const d = 0.012 * s.devotion;
+        s.culture.cooperation = Math.max(0, Math.min(1, s.culture.cooperation + b.tenets.cooperation * d));
+        s.culture.aggression = Math.max(0, Math.min(1, s.culture.aggression + b.tenets.aggression * d));
+        s.culture.innovation = Math.max(0, Math.min(1, s.culture.innovation + b.tenets.innovation * d));
+      } else if (s.memberIds.length >= 4) {
+        const leader = this.byId.get(s.leaderId ?? "");
+        const spark = leader ? leader.intelligence * (0.4 + leader.education) * (0.3 + leader.personality.curiosity) : 0.3;
+        if (this.rng.next() < 0.0006 * spark) this.foundBelief(s, leader);
+      }
+    }
+    // Keep the registry bounded; forgotten faiths fade from the record.
+    if (this.state.beliefs.length > 40) {
+      const active = new Set(this.state.settlements.map((s) => s.beliefId).filter((x): x is string => !!x));
+      this.state.beliefs = this.state.beliefs.filter((b) => active.has(b.id)).slice(-30);
+    }
   }
 
   // ----------------------------------------------------------- settlements
@@ -952,6 +1029,7 @@ export class SimulationEngine {
         knowledge: 0.05,
         foundedTick: this.state.tick,
         populationPeak: 0,
+        devotion: 0,
         culture: { cooperation: 0.4, tradePreference: 0.3, aggression: 0.2, innovation: 0.3 },
       };
       for (const h of group) h.settlementId = settlement.id;
@@ -1206,6 +1284,7 @@ export class SimulationEngine {
       for (const home of this.state.households) this.maybeMigrate(home);
 
       this.updateSettlements();
+      this.updateBeliefs();
       this.interSettlement();
       if (this.state.links.length > 40) this.state.links = this.state.links.slice(-24);
       this.advanceResearch();
